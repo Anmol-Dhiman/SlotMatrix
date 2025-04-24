@@ -58,12 +58,18 @@ export function activate(context: vscode.ExtensionContext) {
               runCommand(message.data);
               break;
             case MessageId.createTerminal:
-              if (message.data === Terminals.anvilTerminal) {
+              if (
+                message.data === Terminals.anvilTerminal &&
+                anvilTerminal === undefined
+              ) {
                 anvilTerminal = vscode.window.createTerminal({
                   name: "SlotMatrix Anvil Terminal",
                 });
                 anvilTerminal.sendText("anvil");
-              } else if (message.data === Terminals.commandTerminal) {
+              } else if (
+                message.data === Terminals.commandTerminal &&
+                commandTerminal === undefined
+              ) {
                 commandTerminal = vscode.window.createTerminal({
                   name: "SlotMatrix Command Terminal",
                 });
@@ -106,7 +112,7 @@ export function activate(context: vscode.ExtensionContext) {
             // ---- FILES ----
             case MessageId.getSolFiles:
               const data = getAllDeployableContracts();
-              console.log("data : ", data);
+
               panel.webview.postMessage({
                 id: MessageId.getSolFiles,
                 data: data,
@@ -116,7 +122,7 @@ export function activate(context: vscode.ExtensionContext) {
               try {
                 const jsonContent = fs.readFileSync(message.data, "utf8");
                 const parsed = JSON.parse(jsonContent);
-                console.log("parsed value : ", parsed);
+
                 panel.webview.postMessage({
                   id: MessageId.getAbi,
                   data: parsed,
@@ -147,13 +153,6 @@ export function activate(context: vscode.ExtensionContext) {
         anvilTerminal?.dispose();
         commandTerminal?.dispose();
       });
-
-      console.log(
-        "get contract : , ",
-        getContractsFromFile(
-          "/Users/anmol/Desktop/i/College/blockchain/vs-code-ext/highlighter/test_foundry/src/Counter.sol"
-        )
-      );
     })
   );
 }

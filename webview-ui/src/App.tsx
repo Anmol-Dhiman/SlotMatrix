@@ -1,15 +1,26 @@
 import {
   VscodeButton,
   VscodeDivider,
-  VscodeFormGroup,
   VscodeOption,
   VscodeSingleSelect,
+  VscodeTabHeader,
+  VscodeTabPanel,
+  VscodeTabs,
   VscodeTextfield,
 } from "@vscode-elements/react-elements";
+
 import "./App.css";
-import { AnvilKeys as wallets } from "../utils/AnvilKeys";
+import { AnvilKeys } from "../utils/AnvilKeys";
 import { useEffect, useState } from "react";
-import { MessageId, Terminals } from "../../src/MessageId";
+import { MessageId, Terminals, VSCodeMessage } from "../../src/MessageId";
+import { ABIEntry, FuncState, DeployedContract } from "../utils/Types";
+import { ethers } from "ethers";
+import {
+  parseConstructorArgs,
+  // consoleLog,
+  parseEthValue,
+} from "../utils/HelperFunc";
+import "@vscode/codicons/dist/codicon.css";
 
 declare function acquireVsCodeApi(): {
   postMessage: (message: any) => void;
@@ -17,18 +28,24 @@ declare function acquireVsCodeApi(): {
   setState: (state: any) => void;
 };
 
-function log(message: string) {
-  vscode.postMessage({
-    id: MessageId.log,
-    data: message,
-  });
-}
+// to check ui from browser
+const isVSCode = typeof acquireVsCodeApi === "function";
 
-const vscode = acquireVsCodeApi();
+const vscode = isVSCode
+  ? acquireVsCodeApi()
+  : {
+      postMessage: (msg: any) => {
+        console.log("[Mock vscode.postMessage]", msg);
+      },
+    };
+
+const ETHFormat = ["wei", "kwei", "mwei", "gwei", "szabo", "finney", "ether"];
 
 function App() {
-  const [__, setCurrentWallet] = useState(wallets[0].privateKey); // current private key from anvil wallet accounts
+  const [currentWallet, setCurrentWallet] = useState(0); // current private key from anvil wallet accounts
+  const [wallets] = useState(AnvilKeys);
   const [pwd, setPwd] = useState(); // current working directory
+
   const [contractFiles, setContractFiles] =
     useState<
       { contractName: string; contractFilePath: string; basename: string }[]
@@ -39,12 +56,19 @@ function App() {
     contractFilePath: string;
     basename: string;
   }>(); // current contract to deploy
-  const [_, setCurrentContractJsonData] = useState<any>(null); // current contract json data (abi, bytecode,...etc) from {pwd}/out folder
+  const [currentContractJsonData, setCurrentContractJsonData] =
+    useState<any>(null); // current contract json data (abi, bytecode,...etc) from {pwd}/out folder
 
-  // -----
+  const [ethValue, setEthValue] = useState<string>(""); // default eth value to send with the transaction
+  const [ethFormat, setEthFormat] = useState<string>(
+    ETHFormat[0].toUpperCase()
+  ); // default format to send with the transaction
 
-  const [constructorData, setConstructorData] = useState<any>(null);
-  const [constructorInput, setConstructorInputs] = useState<string[]>([]);
+  const [constructorInputs, setConstructorInputs] = useState<FuncState>();
+
+  const [deployedContract, setDeployedContract] = useState<DeployedContract[]>(
+    []
+  );
 
   window.addEventListener("message", (event) => {
     const { id, data } = event.data;
@@ -56,11 +80,37 @@ function App() {
       setPwd(data);
     }
     if (id === MessageId.getAbi) {
-      log(data);
       setCurrentContractJsonData(data);
-      setConstructorData(data.abi[0]);
+      setConstructorInputs(buildInitialConstructorState(data.abi[0])); // setting constructor input state
     }
   });
+
+  function buildInitialConstructorState(abi: ABIEntry): FuncState {
+    return {
+      stateMutability: abi.stateMutability,
+      inputs: (abi.inputs || []).map((input) => ({
+        name: input.name,
+        type: input.type,
+        value: "",
+      })),
+    };
+  }
+
+  function buildFunctionStatesFromABI(abi: any[]): FuncState[] {
+    return abi
+      .filter((item) => item.type === "function")
+      .map(
+        (func): FuncState => ({
+          name: func.name,
+          stateMutability: func.stateMutability,
+          inputs: func.inputs.map((input: any) => ({
+            name: input.name,
+            type: input.type,
+            value: "",
+          })),
+        })
+      );
+  }
 
   useEffect(() => {
     vscode.postMessage({
@@ -68,6 +118,11 @@ function App() {
     });
     vscode.postMessage({
       id: MessageId.getCurrentWorkingDirectory,
+    });
+
+    vscode.postMessage({
+      id: MessageId.createTerminal,
+      data: Terminals.anvilTerminal,
     });
   }, []);
 
@@ -84,41 +139,105 @@ function App() {
         currentContract.contractName +
         ".json",
     });
-
-    // reset constructorInput
-    setConstructorInputs([]);
   }, [currentContract, pwd]);
 
-  // Handle input changes dynamically
-
-  const handleDeploy = () => {
-    // const match = currentContract.match(/\/([^\/]+\.sol):([^\/]+)$/);
-    // const dataValue = match ? `./src/${match[1]}:${match[2]}` : "";
-
-    // let command = `forge create --rpc-url http://localhost:8545 --private-key ${currentWallet} ${dataValue} --broadcast`;
-    // if (constructorInput.length > 0) {
-    //   command += " --constructor-args";
-    //   constructorInput.forEach((input) => {
-    //     command += ` ${input}`;
-    //   });
-    // }
-
-    vscode.postMessage({
-      id: MessageId.createTerminal,
-      data: Terminals.commandTerminal,
+  function handleInputChange(index: number, value: string) {
+    setConstructorInputs((prevState: FuncState | undefined) => {
+      if (!prevState) return prevState;
+      const updatedInputs = prevState.inputs.map((input, idx) =>
+        idx === index ? { ...input, value } : input
+      );
+      return {
+        ...prevState,
+        inputs: updatedInputs,
+      };
     });
-    vscode.postMessage({
-      id: MessageId.createTerminal,
-      data: Terminals.anvilTerminal,
-    });
+  }
 
-    // vscode.postMessage({
-    //   id: MessageId.runCommand,
-    //   data: command,
-    // });
-  };
+  async function handleDeploy() {
+    if (
+      currentContract === undefined ||
+      pwd === undefined ||
+      constructorInputs === undefined
+    )
+      return;
+    else {
+      constructorInputs?.inputs.forEach((input) => {
+        if (input.value === "") {
+          vscode.postMessage({
+            id: MessageId.showMessage,
+            data: {
+              id: VSCodeMessage.error,
+              message: `Please fill the ${input.name} input`,
+            },
+          });
+          return;
+        }
+      });
 
-  // const deployContract = () => {};
+      const provider = new ethers.JsonRpcProvider("http://localhost:8545");
+      const wallet = new ethers.Wallet(
+        wallets[currentWallet].privateKey,
+        provider
+      );
+
+      const factory = new ethers.ContractFactory(
+        currentContractJsonData.abi,
+        currentContractJsonData.bytecode.object,
+        wallet
+      );
+
+      const value =
+        constructorInputs.stateMutability === "payable"
+          ? {
+              value: parseEthValue(ethValue, ethFormat),
+            }
+          : {};
+      const contract = await factory.deploy(
+        ...parseConstructorArgs(constructorInputs.inputs),
+        value
+      );
+      await contract.waitForDeployment();
+
+      const newContract: DeployedContract = {
+        name: currentContract.contractName,
+        address: await contract.getAddress(),
+        functions: buildFunctionStatesFromABI(currentContractJsonData.abi),
+      };
+
+      setDeployedContract((prev) => [...prev, newContract]);
+    }
+  }
+
+  function updateInputValue(
+    prev: DeployedContract[],
+    contractIndex: number,
+    functionIndex: number,
+    inputIndex: number,
+    newValue: string
+  ): DeployedContract[] {
+    const updated = [...prev];
+    updated[contractIndex] = { ...updated[contractIndex] };
+    updated[contractIndex].functions = [...updated[contractIndex].functions];
+    updated[contractIndex].functions[functionIndex] = {
+      ...updated[contractIndex].functions[functionIndex],
+    };
+    updated[contractIndex].functions[functionIndex].inputs = [
+      ...updated[contractIndex].functions[functionIndex].inputs,
+    ];
+    updated[contractIndex].functions[functionIndex].inputs[inputIndex] = {
+      ...updated[contractIndex].functions[functionIndex].inputs[inputIndex],
+      value: newValue,
+    };
+
+    return updated;
+  }
+
+  function handleCloseContractTab(indexToRemove: number) {
+    setDeployedContract((prev) =>
+      prev.filter((_, index) => index !== indexToRemove)
+    );
+  }
 
   return (
     <div>
@@ -131,11 +250,13 @@ function App() {
         <p>Wallets</p>
         <VscodeSingleSelect
           onChange={(event) => {
-            setCurrentWallet((event.target as HTMLSelectElement).value);
+            setCurrentWallet(
+              parseInt((event.target as HTMLSelectElement).value)
+            );
           }}
         >
           {wallets.map((account, index) => (
-            <VscodeOption key={index} value={account.privateKey}>
+            <VscodeOption key={index} value={index.toString()}>
               {account.publicKey.slice(0, 6) +
                 "..." +
                 account.publicKey.slice(-6) +
@@ -144,7 +265,7 @@ function App() {
           ))}
         </VscodeSingleSelect>
       </div>
-
+      {/* deployable contract  */}
       <div>
         <p>Deployable Contract</p>
         <VscodeSingleSelect
@@ -163,39 +284,157 @@ function App() {
             ))}
         </VscodeSingleSelect>
       </div>
-
-      {constructorData !== null && constructorData.type === "constructor" && (
-        <VscodeFormGroup>
-          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-            {constructorData.inputs.map((input: any, index: number) => (
+      {/* eth value  */}
+      {constructorInputs !== undefined &&
+        constructorInputs.stateMutability === "payable" && (
+          <div>
+            <p>ETH Value</p>
+            <div
+              style={{ display: "flex", flexDirection: "column", gap: "8px" }}
+            >
               <VscodeTextfield
-                key={index}
-                value={
-                  constructorInput[index] === undefined
-                    ? ""
-                    : constructorInput[index]
-                }
-                placeholder={input.name}
+                type="number"
+                value={ethValue}
+                placeholder="ETH Value"
+                style={{ width: "20%" }}
                 onChange={(event) => {
-                  const newValue = (event.target as HTMLInputElement).value;
-                  setConstructorInputs((prev) => {
-                    const newInputs = [...prev];
-                    newInputs[index] = newValue;
-                    return newInputs;
-                  });
+                  setEthValue((event.target as HTMLInputElement).value);
                 }}
               />
-            ))}
-          </div>
-        </VscodeFormGroup>
-      )}
 
+              <VscodeSingleSelect
+                onChange={(event) => {
+                  setEthFormat((event.target as HTMLSelectElement).value);
+                }}
+              >
+                {ETHFormat.map((format, index) => {
+                  return (
+                    <VscodeOption key={index} value={format}>
+                      {format.toLocaleUpperCase()}
+                    </VscodeOption>
+                  );
+                })}
+              </VscodeSingleSelect>
+            </div>
+          </div>
+        )}
+      {/* constructor inputs */}
+      {constructorInputs !== undefined &&
+        constructorInputs.inputs.length > 0 && (
+          <div>
+            <p>Constructor Input</p>
+            {constructorInputs.inputs.map((input, index) => {
+              return (
+                <VscodeTextfield
+                  key={index}
+                  type="number"
+                  value={input.value}
+                  placeholder={input.name}
+                  style={{ marginBottom: "8px", width: "20%" }}
+                  onChange={(event) => {
+                    handleInputChange(
+                      index,
+                      (event.target as HTMLInputElement).value
+                    );
+                  }}
+                />
+              );
+            })}
+          </div>
+        )}
+      {/* deploy button */}
       <div>
-        <VscodeButton onClick={handleDeploy} style={{}}>
+        <VscodeButton
+          onClick={handleDeploy}
+          style={{
+            backgroundColor:
+              constructorInputs?.stateMutability === "payable"
+                ? "#cb0303"
+                : undefined,
+            marginBottom: "8px",
+            marginTop: "4px",
+            width: "20%",
+          }}
+        >
           Deploy
         </VscodeButton>
       </div>
-       
+
+      {/* functions of contract and intraction  */}
+      <VscodeTabs>
+        {deployedContract.map((contractData, contractIndex) => (
+          <>
+            <VscodeTabHeader>
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: "4px",
+                }}
+              >
+                <p>{contractData.name}</p>
+                <div
+                  className="icon"
+                  style={{ paddingTop: "4px" }}
+                  onClick={() => handleCloseContractTab(contractIndex)}
+                >
+                  <i className="codicon codicon-close"></i>
+                </div>
+              </div>
+            </VscodeTabHeader>
+            <VscodeTabPanel>
+              <p>{"Address : " + contractData.address}</p>
+              <div>
+                {contractData.functions.map((functionData, functionIndex) => (
+                  <div key={functionIndex}>
+                    <p>{functionData.name}</p>
+                    <div>
+                      {functionData.inputs.map((input, inputIndex) => (
+                        <div key={inputIndex}>
+                          <VscodeTextfield
+                            type="number"
+                            value={input.value}
+                            style={{ marginBottom: "8px", width: "20%" }}
+                            placeholder={input.name}
+                            onChange={(event) => {
+                              const newValue = (
+                                event.target as HTMLInputElement
+                              ).value;
+                              setDeployedContract((prev) =>
+                                updateInputValue(
+                                  prev,
+                                  contractIndex,
+                                  functionIndex,
+                                  inputIndex,
+                                  newValue
+                                )
+                              );
+                            }}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                    <VscodeButton
+                      style={{
+                        backgroundColor:
+                          functionData.stateMutability === "payable"
+                            ? "#cb0303"
+                            : functionData.stateMutability === "nonpayable"
+                            ? "#fc8330"
+                            : undefined,
+                        width: "20%",
+                      }}
+                    >
+                      call
+                    </VscodeButton>
+                  </div>
+                ))}
+              </div>
+            </VscodeTabPanel>
+          </>
+        ))}
+      </VscodeTabs>
     </div>
   );
 }
