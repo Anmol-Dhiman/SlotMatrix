@@ -39,6 +39,7 @@
     "typescript": "^5.8.2"
   },
   "dependencies": {
+    "node-pty": "^1.0.0",
     "solidity-parser-antlr": "^0.4.11"
   }
 }

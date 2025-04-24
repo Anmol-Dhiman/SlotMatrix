@@ -1,8 +1,8 @@
 import * as vscode from "vscode";
 import * as path from "path";
 import * as fs from "fs";
-import parser from "solidity-parser-antlr";
 import { MessageId, Terminals, VSCodeMessage } from "./MessageId";
+import { exec } from "child_process";
 
 let anvilTerminal: vscode.Terminal | undefined;
 let commandTerminal: vscode.Terminal | undefined;
@@ -21,11 +21,9 @@ export function activate(context: vscode.ExtensionContext) {
           ],
         }
       );
-
       // getWebViewContent
       const htmlPath = path.join(context.extensionPath, "media", "index.html");
       let html = fs.readFileSync(htmlPath, "utf8");
-
       // Replace paths with Webview-compatible URIs
       html = html.replace(/(src|href)="(.+?)"/g, (_, attr, file) => {
         const filePath = vscode.Uri.file(
@@ -34,7 +32,6 @@ export function activate(context: vscode.ExtensionContext) {
         const webviewUri = panel.webview.asWebviewUri(filePath);
         return `${attr}="${webviewUri}"`;
       });
-
       panel.webview.html = html;
 
       panel.webview.onDidReceiveMessage(
@@ -56,13 +53,10 @@ export function activate(context: vscode.ExtensionContext) {
                 vscode.window.showWarningMessage(message.data.data);
               }
               break;
-
             // ---- TERMINAL ----
             case MessageId.runCommand:
-              commandTerminal?.sendText(message.data);
-              commandTerminal?.show();
+              runCommand(message.data);
               break;
-
             case MessageId.createTerminal:
               if (message.data === Terminals.anvilTerminal) {
                 anvilTerminal = vscode.window.createTerminal({
@@ -75,7 +69,6 @@ export function activate(context: vscode.ExtensionContext) {
                 });
               }
               break;
-
             case MessageId.showTerminal:
               if (message.data === Terminals.anvilTerminal) {
                 anvilTerminal?.show();
@@ -97,7 +90,6 @@ export function activate(context: vscode.ExtensionContext) {
                 commandTerminal?.dispose();
               }
               break;
-
             case MessageId.isTerminalRunning:
               if (message.data === Terminals.anvilTerminal) {
                 panel.webview.postMessage({
@@ -111,27 +103,18 @@ export function activate(context: vscode.ExtensionContext) {
                 });
               }
               break;
-
             // ---- FILES ----
             case MessageId.getSolFiles:
+              const data = getAllDeployableContracts();
+              console.log("data : ", data);
               panel.webview.postMessage({
                 id: MessageId.getSolFiles,
-                data: getAllDeployableContracts(),
+                data: data,
               });
               break;
-
             case MessageId.getAbi:
               try {
-                const workspaceFolders = vscode.workspace.workspaceFolders;
-                if (!workspaceFolders || workspaceFolders.length === 0) {
-                  vscode.window.showErrorMessage("No workspace folder open");
-                  return;
-                }
-                const srcPath = path.join(
-                  workspaceFolders[0].uri.fsPath,
-                  "out" + message.data
-                );
-                const jsonContent = fs.readFileSync(srcPath, "utf8");
+                const jsonContent = fs.readFileSync(message.data, "utf8");
                 const parsed = JSON.parse(jsonContent);
                 console.log("parsed value : ", parsed);
                 panel.webview.postMessage({
@@ -142,17 +125,61 @@ export function activate(context: vscode.ExtensionContext) {
                 vscode.window.showErrorMessage("Compile the contract first");
               }
               break;
+
+            case MessageId.getCurrentWorkingDirectory:
+              const workspaceFolders = vscode.workspace.workspaceFolders;
+              if (!workspaceFolders || workspaceFolders.length === 0) {
+                vscode.window.showErrorMessage("No workspace folder open");
+                return;
+              }
+              const currentWorkingDirectory = workspaceFolders[0].uri.fsPath;
+              panel.webview.postMessage({
+                id: MessageId.getCurrentWorkingDirectory,
+                data: currentWorkingDirectory,
+              });
+              break;
           }
         },
         undefined,
         context.subscriptions
       );
-
       panel.onDidDispose(() => {
         anvilTerminal?.dispose();
         commandTerminal?.dispose();
       });
+
+      console.log(
+        "get contract : , ",
+        getContractsFromFile(
+          "/Users/anmol/Desktop/i/College/blockchain/vs-code-ext/highlighter/test_foundry/src/Counter.sol"
+        )
+      );
     })
+  );
+}
+
+function runCommand(command: string) {
+  const workspaceFolders = vscode.workspace.workspaceFolders;
+
+  if (!workspaceFolders || workspaceFolders.length === 0) {
+    vscode.window.showErrorMessage("No workspace folder open");
+    return;
+  }
+
+  exec(
+    command,
+    { cwd: workspaceFolders[0].uri.fsPath },
+    (error, stdout, stderr) => {
+      if (error) {
+        console.log("log : ", error);
+        return;
+      }
+      if (stderr) {
+        console.log("log : ", stderr);
+        return;
+      }
+      console.log("log : ", stdout);
+    }
   );
 }
 
@@ -181,30 +208,28 @@ function getSolidityFiles(dir: string): string[] {
 // Util: Parse a file and return all deployable contracts
 function getContractsFromFile(
   filePath: string
-): { name: string; filePath: string }[] {
+): { contractName: string; contractFilePath: string; basename: string }[] {
   const content = fs.readFileSync(filePath, "utf8");
 
-  const contracts: { name: string; filePath: string }[] = [];
+  const contracts: {
+    contractName: string;
+    contractFilePath: string;
+    basename: string;
+  }[] = [];
 
   try {
-    const ast = parser.parse(content, { tolerant: true, loc: true });
-
-    parser.visit(ast, {
-      ContractDefinition(node) {
-        // Find the raw text of the contract definition
-        const contractStart = node.loc?.start.line ?? 0;
-        const contractEnd = node.loc?.end.line ?? 0;
-
-        const lines = content.split("\n").slice(contractStart - 1, contractEnd);
-        const contractText = lines.join("\n");
-
-        // Skip abstract contracts
-        const isAbstract = /^\s*abstract\s+contract\b/.test(contractText);
-        if (!isAbstract && node.kind === "contract") {
-          contracts.push({ name: node.name, filePath });
-        }
-      },
-    });
+    const contractRegex = /\b(abstract\s+)?contract\s+(\w+)/g;
+    let match: RegExpExecArray | null;
+    while ((match = contractRegex.exec(content)) !== null) {
+      const isAbstract = Boolean(match[1]);
+      const contractName = match[2];
+      if (isAbstract) continue;
+      contracts.push({
+        contractName: contractName,
+        contractFilePath: filePath,
+        basename: path.basename(filePath),
+      });
+    }
   } catch (err) {
     console.warn(`Failed to parse ${filePath}:`, err);
   }
@@ -213,7 +238,11 @@ function getContractsFromFile(
 }
 
 // Main: Get all deployable contracts from the "src" folder
-function getAllDeployableContracts(): { name: string; filePath: string }[] {
+function getAllDeployableContracts(): {
+  contractName: string;
+  contractFilePath: string;
+  basename: string;
+}[] {
   const workspaceFolders = vscode.workspace.workspaceFolders;
 
   if (!workspaceFolders || workspaceFolders.length === 0) {
@@ -224,6 +253,5 @@ function getAllDeployableContracts(): { name: string; filePath: string }[] {
   const srcPath = path.join(workspaceFolders[0].uri.fsPath, "src");
 
   const solFiles = getSolidityFiles(srcPath);
-
   return solFiles.flatMap(getContractsFromFile);
 }
