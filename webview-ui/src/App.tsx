@@ -73,8 +73,6 @@ function App() {
     []
   );
 
-  const [logData, setLogData] = useState<LogData[]>([]);
-
   window.addEventListener("message", (event) => {
     const { id, data } = event.data;
     if (id === MessageId.getSolFiles) {
@@ -262,6 +260,21 @@ function App() {
     return updated;
   }
 
+  function updateLogData(
+    prev: DeployedContract[],
+    contractIndex: number,
+    newLog: LogData
+  ): DeployedContract[] {
+    const updated = [...prev];
+
+    updated[contractIndex] = {
+      ...updated[contractIndex],
+      logs: [...(updated[contractIndex].logs || []), newLog],
+    };
+
+    return updated;
+  }
+
   async function handleFunctionCall(
     functionData: FuncState,
     contractAddress: string,
@@ -378,7 +391,8 @@ function App() {
         rawOutput,
         decodedOutput
       );
-      if (log !== undefined) setLogData((prev) => [...prev, log]);
+      if (log !== undefined)
+        setDeployedContract((prev) => updateLogData(prev, contractIndex, log));
     }
   }
 
@@ -613,7 +627,7 @@ function App() {
                     width: "37.5%",
                   }}
                 >
-                  <Log logData={logData} />
+                  <Log logData={contractData.logs || []} />
                 </div>
               </div>
             </VscodeTabPanel>

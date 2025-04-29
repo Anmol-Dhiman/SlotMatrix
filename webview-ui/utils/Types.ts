@@ -27,6 +27,7 @@ export type DeployedContract = {
   functions: FuncState[];
   abi: any;
   balance?: string;
+  logs?: LogData[];
 };
 
 export type LogData = {
