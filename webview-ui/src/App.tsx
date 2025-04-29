@@ -16,6 +16,7 @@ import { MessageId, Terminals, VSCodeMessage } from "../../src/MessageId";
 import { ABIEntry, FuncState, DeployedContract } from "../utils/Types";
 import { ethers } from "ethers";
 import {
+  consoleLog,
   parseConstructorArgs,
   // consoleLog,
   parseEthValue,
@@ -85,7 +86,8 @@ function App() {
     }
   });
 
-  function buildInitialConstructorState(abi: ABIEntry): FuncState {
+  function buildInitialConstructorState(abi: ABIEntry): FuncState | undefined {
+    if (abi.type !== "constructor") return undefined;
     return {
       stateMutability: abi.stateMutability,
       inputs: (abi.inputs || []).map((input) => ({
@@ -197,12 +199,12 @@ function App() {
         ...parseConstructorArgs(constructorInputs.inputs),
         value
       );
-      await contract.waitForDeployment();
 
       const newContract: DeployedContract = {
         name: currentContract.contractName,
         address: await contract.getAddress(),
         functions: buildFunctionStatesFromABI(currentContractJsonData.abi),
+        abi: currentContractJsonData.abi,
       };
 
       setDeployedContract((prev) => [...prev, newContract]);
@@ -237,6 +239,133 @@ function App() {
     setDeployedContract((prev) =>
       prev.filter((_, index) => index !== indexToRemove)
     );
+  }
+
+  function updateOutputValue(
+    prev: DeployedContract[],
+    contractIndex: number,
+    functionIndex: number,
+    newValue: string
+  ): DeployedContract[] {
+    const updated = [...prev];
+    updated[contractIndex] = { ...updated[contractIndex] };
+    updated[contractIndex].functions = [...updated[contractIndex].functions];
+    updated[contractIndex].functions[functionIndex] = {
+      ...updated[contractIndex].functions[functionIndex],
+      outputs: newValue,
+    };
+
+    return updated;
+  }
+
+  async function handleFunctionCall(
+    functionData: FuncState,
+    contractAddress: string,
+    abi: any,
+    contractIndex: number,
+    functionIndex: number
+  ) {
+    if (functionData.name === undefined) return;
+
+    const provider = new ethers.JsonRpcProvider("http://localhost:8545");
+
+    const signer = new ethers.Wallet(
+      wallets[currentWallet].privateKey,
+      provider
+    );
+
+    const contract = new ethers.Contract(contractAddress, abi, provider);
+    const contractWithSigner = contract.connect(signer);
+    const iff = new ethers.Interface(abi);
+
+    consoleLog(JSON.stringify(functionData), vscode);
+
+    // Prepare arguments
+    const args = parseConstructorArgs(functionData.inputs);
+
+    let result: any;
+
+    // If function is view or pure => call normally
+    if (
+      functionData.stateMutability === "view" ||
+      functionData.stateMutability === "pure"
+    ) {
+      result = await contract[functionData.name](...args);
+      consoleLog(`value is ${result}`, vscode);
+      setDeployedContract((prev) =>
+        updateOutputValue(prev, contractIndex, functionIndex, `${result}`)
+      );
+      return;
+    }
+    // If function is payable
+    else if (functionData.stateMutability === "payable") {
+      const rawOutput = await provider.call({
+        to: contractAddress,
+        data: iff.encodeFunctionData(functionData.name, [...args]),
+        value: parseEthValue(ethValue, ethFormat),
+      });
+      const decodedOutput = iff.decodeFunctionResult(
+        functionData.name,
+        rawOutput
+      );
+      if (decodedOutput.length !== 0) {
+        setDeployedContract((prev) =>
+          updateOutputValue(
+            prev,
+            contractIndex,
+            functionIndex,
+            `${decodedOutput.toString()}`
+          )
+        );
+      }
+      result = await (contractWithSigner as any)[functionData.name](...args, {
+        value: parseEthValue(ethValue, ethFormat),
+      });
+      consoleLog(`value is ${decodedOutput}`, vscode);
+      return;
+    }
+    // If function is nonpayable (regular transaction)
+    else if (functionData.stateMutability === "nonpayable") {
+      // Make sure ethValue is empty for nonpayable functions
+      if (ethValue !== "") {
+        vscode.postMessage({
+          id: MessageId.showMessage,
+          data: {
+            id: VSCodeMessage.error,
+            data: `${functionData.name} is not payable function`,
+          },
+        });
+        return; // Important to stop execution
+      }
+
+      // simulation
+      const rawOutput = await provider.call({
+        to: contractAddress,
+        data: iff.encodeFunctionData(functionData.name, [...args]),
+      });
+
+      const decodedOutput = iff.decodeFunctionResult(
+        functionData.name,
+        rawOutput
+      );
+      consoleLog(`decoded output is : ${decodedOutput}`, vscode);
+      if (decodedOutput.length !== 0) {
+        setDeployedContract((prev) =>
+          updateOutputValue(
+            prev,
+            contractIndex,
+            functionIndex,
+            `${decodedOutput.toString()}`
+          )
+        );
+      }
+
+      // actual call
+      result = await (contractWithSigner as any)[functionData.name](...args);
+      await result.wait();
+
+      return;
+    }
   }
 
   return (
@@ -285,39 +414,36 @@ function App() {
         </VscodeSingleSelect>
       </div>
       {/* eth value  */}
-      {constructorInputs !== undefined &&
-        constructorInputs.stateMutability === "payable" && (
-          <div>
-            <p>ETH Value</p>
-            <div
-              style={{ display: "flex", flexDirection: "column", gap: "8px" }}
-            >
-              <VscodeTextfield
-                type="number"
-                value={ethValue}
-                placeholder="ETH Value"
-                style={{ width: "20%" }}
-                onChange={(event) => {
-                  setEthValue((event.target as HTMLInputElement).value);
-                }}
-              />
+      {constructorInputs !== undefined && (
+        <div>
+          <p>ETH Value</p>
+          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            <VscodeTextfield
+              type="number"
+              value={ethValue}
+              placeholder="ETH Value"
+              style={{ width: "20%" }}
+              onChange={(event) => {
+                setEthValue((event.target as HTMLInputElement).value);
+              }}
+            />
 
-              <VscodeSingleSelect
-                onChange={(event) => {
-                  setEthFormat((event.target as HTMLSelectElement).value);
-                }}
-              >
-                {ETHFormat.map((format, index) => {
-                  return (
-                    <VscodeOption key={index} value={format}>
-                      {format.toLocaleUpperCase()}
-                    </VscodeOption>
-                  );
-                })}
-              </VscodeSingleSelect>
-            </div>
+            <VscodeSingleSelect
+              onChange={(event) => {
+                setEthFormat((event.target as HTMLSelectElement).value);
+              }}
+            >
+              {ETHFormat.map((format, index) => {
+                return (
+                  <VscodeOption key={index} value={format}>
+                    {format.toLocaleUpperCase()}
+                  </VscodeOption>
+                );
+              })}
+            </VscodeSingleSelect>
           </div>
-        )}
+        </div>
+      )}
       {/* constructor inputs */}
       {constructorInputs !== undefined &&
         constructorInputs.inputs.length > 0 && (
@@ -425,9 +551,19 @@ function App() {
                             : undefined,
                         width: "20%",
                       }}
+                      onClick={() =>
+                        handleFunctionCall(
+                          functionData,
+                          contractData.address,
+                          contractData.abi,
+                          contractIndex,
+                          functionIndex
+                        )
+                      }
                     >
                       call
                     </VscodeButton>
+                    <div>{functionData.outputs}</div>
                   </div>
                 ))}
               </div>

@@ -13,9 +13,10 @@ export function activate(context: vscode.ExtensionContext) {
       const panel = vscode.window.createWebviewPanel(
         "slotmatrix",
         "SlotMatrix",
-        vscode.ViewColumn.Beside,
+        vscode.ViewColumn.One,
         {
           enableScripts: true,
+          retainContextWhenHidden: true,
           localResourceRoots: [
             vscode.Uri.file(path.join(context.extensionPath, "media")),
           ],
