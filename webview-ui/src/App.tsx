@@ -13,15 +13,17 @@ import "./App.css";
 import { AnvilKeys } from "../utils/AnvilKeys";
 import { useEffect, useState } from "react";
 import { MessageId, Terminals, VSCodeMessage } from "../../src/MessageId";
-import { ABIEntry, FuncState, DeployedContract } from "../utils/Types";
+import { ABIEntry, FuncState, DeployedContract, LogData } from "../utils/Types";
 import { ethers } from "ethers";
+
 import {
   consoleLog,
   parseConstructorArgs,
-  // consoleLog,
+  buildLogData,
   parseEthValue,
 } from "../utils/HelperFunc";
 import "@vscode/codicons/dist/codicon.css";
+import Log from "./components/Log";
 
 declare function acquireVsCodeApi(): {
   postMessage: (message: any) => void;
@@ -70,6 +72,8 @@ function App() {
   const [deployedContract, setDeployedContract] = useState<DeployedContract[]>(
     []
   );
+
+  const [logData, setLogData] = useState<LogData[]>([]);
 
   window.addEventListener("message", (event) => {
     const { id, data } = event.data;
@@ -348,7 +352,7 @@ function App() {
         functionData.name,
         rawOutput
       );
-      consoleLog(`decoded output is : ${decodedOutput}`, vscode);
+
       if (decodedOutput.length !== 0) {
         setDeployedContract((prev) =>
           updateOutputValue(
@@ -361,10 +365,20 @@ function App() {
       }
 
       // actual call
-      result = await (contractWithSigner as any)[functionData.name](...args);
-      await result.wait();
+      const response = await (contractWithSigner as any)[functionData.name](
+        ...args
+      );
+      const receipt = await response.wait();
 
-      return;
+      const log = buildLogData(
+        response,
+        receipt,
+        iff,
+        functionData.name,
+        rawOutput,
+        decodedOutput
+      );
+      if (log !== undefined) setLogData((prev) => [...prev, log]);
     }
   }
 
@@ -487,6 +501,7 @@ function App() {
       </div>
 
       {/* functions of contract and intraction  */}
+
       <VscodeTabs>
         {deployedContract.map((contractData, contractIndex) => (
           <>
@@ -510,62 +525,96 @@ function App() {
               </div>
             </VscodeTabHeader>
             <VscodeTabPanel>
-              <p>{"Address : " + contractData.address}</p>
-              <div>
-                {contractData.functions.map((functionData, functionIndex) => (
-                  <div key={functionIndex}>
-                    <p>{functionData.name}</p>
-                    <div>
-                      {functionData.inputs.map((input, inputIndex) => (
-                        <div key={inputIndex}>
-                          <VscodeTextfield
-                            type="number"
-                            value={input.value}
-                            style={{ marginBottom: "8px", width: "20%" }}
-                            placeholder={input.name}
-                            onChange={(event) => {
-                              const newValue = (
-                                event.target as HTMLInputElement
-                              ).value;
-                              setDeployedContract((prev) =>
-                                updateInputValue(
-                                  prev,
-                                  contractIndex,
-                                  functionIndex,
-                                  inputIndex,
-                                  newValue
-                                )
-                              );
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "row",
+                }}
+              >
+                <div
+                  style={{
+                    width: "25%",
+                  }}
+                >
+                  <p
+                    style={{
+                      wordBreak: "break-all",
+                      whiteSpace: "normal",
+                      overflowWrap: "break-word",
+                    }}
+                  >
+                    {"Address : " + contractData.address}
+                  </p>
+                  <div>
+                    {contractData.functions.map(
+                      (functionData, functionIndex) => (
+                        <div key={functionIndex}>
+                          <p>{functionData.name}</p>
+                          <div>
+                            {functionData.inputs.map((input, inputIndex) => (
+                              <div key={inputIndex}>
+                                <VscodeTextfield
+                                  type="number"
+                                  value={input.value}
+                                  style={{ marginBottom: "8px", width: "20%" }}
+                                  placeholder={input.name}
+                                  onChange={(event) => {
+                                    const newValue = (
+                                      event.target as HTMLInputElement
+                                    ).value;
+                                    setDeployedContract((prev) =>
+                                      updateInputValue(
+                                        prev,
+                                        contractIndex,
+                                        functionIndex,
+                                        inputIndex,
+                                        newValue
+                                      )
+                                    );
+                                  }}
+                                />
+                              </div>
+                            ))}
+                          </div>
+                          <VscodeButton
+                            style={{
+                              backgroundColor:
+                                functionData.stateMutability === "payable"
+                                  ? "#cb0303"
+                                  : functionData.stateMutability ===
+                                    "nonpayable"
+                                  ? "#fc8330"
+                                  : undefined,
+                              width: "20%",
                             }}
-                          />
+                            onClick={() =>
+                              handleFunctionCall(
+                                functionData,
+                                contractData.address,
+                                contractData.abi,
+                                contractIndex,
+                                functionIndex
+                              )
+                            }
+                          >
+                            call
+                          </VscodeButton>
+                          <div>{functionData.outputs}</div>
                         </div>
-                      ))}
-                    </div>
-                    <VscodeButton
-                      style={{
-                        backgroundColor:
-                          functionData.stateMutability === "payable"
-                            ? "#cb0303"
-                            : functionData.stateMutability === "nonpayable"
-                            ? "#fc8330"
-                            : undefined,
-                        width: "20%",
-                      }}
-                      onClick={() =>
-                        handleFunctionCall(
-                          functionData,
-                          contractData.address,
-                          contractData.abi,
-                          contractIndex,
-                          functionIndex
-                        )
-                      }
-                    >
-                      call
-                    </VscodeButton>
-                    <div>{functionData.outputs}</div>
+                      )
+                    )}
                   </div>
-                ))}
+                </div>
+
+                <div style={{ width: "37.5%" }}>storage</div>
+
+                <div
+                  style={{
+                    width: "37.5%",
+                  }}
+                >
+                  <Log logData={logData} />
+                </div>
               </div>
             </VscodeTabPanel>
           </>

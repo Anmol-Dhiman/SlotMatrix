@@ -28,3 +28,21 @@ export type DeployedContract = {
   abi: any;
   balance?: string;
 };
+
+export type LogData = {
+  heading: string;
+  status: string;
+  transactionHash: string;
+  blockHash: string;
+  blockNumber: number;
+  from: string;
+  to: string;
+  gas: string;
+  transactionCost: string;
+  executionCost: string;
+  input: string;
+  output: string;
+  decodedInput: Record<string, any>;
+  decodedOutput: Record<string, any>;
+  logs?: any[];
+};
