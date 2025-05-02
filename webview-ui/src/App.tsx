@@ -24,6 +24,7 @@ import {
 } from "../utils/HelperFunc";
 import "@vscode/codicons/dist/codicon.css";
 import Log from "./components/Log";
+import StorageLayout from "./components/StorageLayout";
 
 declare function acquireVsCodeApi(): {
   postMessage: (message: any) => void;
@@ -34,7 +35,7 @@ declare function acquireVsCodeApi(): {
 // to check ui from browser
 const isVSCode = typeof acquireVsCodeApi === "function";
 
-const vscode = isVSCode
+export const vscode = isVSCode
   ? acquireVsCodeApi()
   : {
       postMessage: (msg: any) => {
@@ -48,6 +49,7 @@ function App() {
   const [currentWallet, setCurrentWallet] = useState(0); // current private key from anvil wallet accounts
   const [wallets] = useState(AnvilKeys);
   const [pwd, setPwd] = useState(); // current working directory
+  const [refreshTick, setRefreshTick] = useState(0);
 
   const [contractFiles, setContractFiles] =
     useState<
@@ -334,6 +336,7 @@ function App() {
       result = await (contractWithSigner as any)[functionData.name](...args, {
         value: parseEthValue(ethValue, ethFormat),
       });
+      setRefreshTick((prev) => prev + 1);
       consoleLog(`value is ${decodedOutput}`, vscode);
       return;
     }
@@ -389,7 +392,7 @@ function App() {
       );
       if (log !== undefined)
         setDeployedContract((prev) => updateLogData(prev, contractIndex, log));
-
+      setRefreshTick((prev) => prev + 1);
       consoleLog("call successful", vscode);
     }
   }
@@ -618,7 +621,13 @@ function App() {
                   </div>
                 </div>
 
-                <div style={{ width: "37.5%" }}>storage</div>
+                <div style={{ width: "37.5%" }}>
+                  <StorageLayout
+                    storageLayout={currentContractJsonData.storageLayout}
+                    refreshTick={refreshTick}
+                    contractAddress={deployedContract[contractIndex].address}
+                  />
+                </div>
 
                 <div
                   style={{
