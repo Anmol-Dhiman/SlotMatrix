@@ -159,12 +159,8 @@ function App() {
   }
 
   async function handleDeploy() {
-    if (
-      currentContract === undefined ||
-      pwd === undefined ||
-      constructorInputs === undefined
-    )
-      return;
+    consoleLog("deploy funciton", vscode);
+    if (currentContract === undefined || pwd === undefined) return;
     else {
       constructorInputs?.inputs.forEach((input) => {
         if (input.value === "") {
@@ -192,13 +188,13 @@ function App() {
       );
 
       const value =
-        constructorInputs.stateMutability === "payable"
+        constructorInputs?.stateMutability === "payable"
           ? {
               value: parseEthValue(ethValue, ethFormat),
             }
           : {};
       const contract = await factory.deploy(
-        ...parseConstructorArgs(constructorInputs.inputs),
+        ...parseConstructorArgs(constructorInputs?.inputs || []),
         value
       );
 
@@ -393,6 +389,8 @@ function App() {
       );
       if (log !== undefined)
         setDeployedContract((prev) => updateLogData(prev, contractIndex, log));
+
+      consoleLog("call successful", vscode);
     }
   }
 
