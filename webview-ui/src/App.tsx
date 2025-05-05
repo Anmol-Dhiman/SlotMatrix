@@ -23,7 +23,7 @@ import {
   parseEthValue,
 } from "../utils/HelperFunc";
 import "@vscode/codicons/dist/codicon.css";
-import Log from "./components/Log";
+// import Log from "./components/Log";
 import StorageLayout from "./components/StorageLayout";
 
 declare function acquireVsCodeApi(): {
@@ -621,7 +621,7 @@ function App() {
                   </div>
                 </div>
 
-                <div style={{ width: "37.5%" }}>
+                <div style={{ width: "75%" }}>
                   <StorageLayout
                     storageLayout={currentContractJsonData.storageLayout}
                     refreshTick={refreshTick}
@@ -629,13 +629,13 @@ function App() {
                   />
                 </div>
 
-                <div
+                {/* <div
                   style={{
                     width: "37.5%",
                   }}
                 >
                   <Log logData={contractData.logs || []} />
-                </div>
+                </div> */}
               </div>
             </VscodeTabPanel>
           </>

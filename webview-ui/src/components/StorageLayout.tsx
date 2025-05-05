@@ -1,7 +1,10 @@
-import { ethers } from "ethers";
+import { ethers, toBigInt } from "ethers";
 import { useEffect, useState } from "react";
 import { consoleLog } from "../../utils/HelperFunc";
 import { vscode } from "../App";
+
+import JsonView from "@uiw/react-json-view";
+import { vscodeTheme } from "@uiw/react-json-view/vscode";
 
 interface StorageLayoutInterface {
   storageLayout: {
@@ -19,34 +22,47 @@ type StorageDataType = {
   label: string;
   noOfParents: number;
 };
+type TreeNode = StorageDataType & { children?: TreeNode[] };
 
 function StorageLayout({
   storageLayout,
   contractAddress,
   refreshTick,
 }: StorageLayoutInterface) {
-  const [storageData, setStorageData] = useState<StorageDataType[]>([]);
-
+  //   const [storageData, setStorageData] = useState<StorageDataType[]>([]);
+  const [nestedTree, setNestedTree] = useState<TreeNode[]>([]);
   useEffect(() => {
     (async () => {
-      const items = storageLayout.storage;
-      const result = await processStorage(storageLayout, items);
-      consoleLog(
-        JSON.stringify(
-          await getStaticArrayStorage(
-            storageLayout.types[storageLayout.storage[0].type],
-            0n,
-            "static_array"
-          ),
-          null,
-          2
-        ),
-        vscode
-      );
-
-      setStorageData(result);
+      const result = await getStorage();
+      consoleLog(`storage result ${JSON.stringify(result, null, 2)}`, vscode);
+      setNestedTree(buildNestedTree(result));
     })();
   }, [refreshTick]);
+
+  function buildNestedTree(data: StorageDataType[]): TreeNode[] {
+    const result: TreeNode[] = [];
+    const levelMap: Record<number, TreeNode> = {};
+
+    data.forEach((item) => {
+      const node: TreeNode = { ...item, children: [] };
+      const level = item.noOfParents;
+
+      if (level === 0) {
+        result.push(node);
+      } else {
+        const parent = levelMap[level - 1];
+        if (parent) {
+          parent.children!.push(node);
+        } else {
+          result.push(node); // fallback if parent is missing
+        }
+      }
+
+      levelMap[level] = node; // store this node for future children
+    });
+
+    return result;
+  }
 
   function toSlotHex(slot: any) {
     return ethers.zeroPadValue(ethers.toBeHex(BigInt(slot)), 32);
@@ -58,12 +74,10 @@ function StorageLayout({
     label: string,
     depth = 0
   ): Promise<StorageDataType[]> {
+    consoleLog("getting string or bytes value", vscode);
     const slotStorageValue = await getStorageValue(slot.toString());
-
     const rawBytes = ethers.getBytes(slotStorageValue);
-
-    const isShortString = rawBytes[0] !== 0; // this means that storage slot starts with string bytes value and string is shorter than 31 bytes
-
+    const isShortString = rawBytes[0] !== 0;
     let result: StorageDataType[] = [];
     result.push({
       slot: slot.toString(),
@@ -96,14 +110,20 @@ function StorageLayout({
     return result;
   }
 
+  //   this doesn't include the struct based static array
   async function getStaticArrayStorage(
-    type: any,
-    slot: bigint,
-    label: string,
+    slot: any,
+    label: any,
+    arrayType: any,
     depth = 0
   ): Promise<StorageDataType[]> {
+    consoleLog("getting static array value", vscode);
     const result: StorageDataType[] = [];
+
+    const type = storageLayout.types[arrayType];
+
     const length = parseInt(type.label.match(/\[(\d+)\]$/)?.[1] || "0");
+
     const baseBytes = storageLayout.types[type.base].numberOfBytes;
     const baseEncoding = storageLayout.types[type.base].encoding;
     const packingRaito = Math.floor(32 / baseBytes);
@@ -125,228 +145,233 @@ function StorageLayout({
     return result;
   }
 
-  async function getDynamicBytesOrString(slot: bigint): Promise<string> {
-    const val = await getStorageValue(slot.toString());
-
-    const isShort = (parseInt(val.slice(-2), 16) & 1) === 1;
-
-    if (isShort) {
-      return val;
-    } else {
-      const baseSlot = ethers.keccak256(
-        ethers.zeroPadValue(ethers.toBeHex(slot), 32)
-      );
-      const data = await getStorageValue(BigInt(baseSlot).toString());
-      return data;
-    }
-  }
-
-  async function processDynamicArray(
-    baseSlot: bigint,
-    label: string,
-    depth: number
+  async function getStructStorage(
+    storage: any,
+    depth = 0
   ): Promise<StorageDataType[]> {
-    const lengthRaw = await getStorageValue(baseSlot.toString());
-    const length = parseInt(ethers.toBigInt(lengthRaw).toString());
-    const startSlot = ethers.keccak256(
-      ethers.zeroPadValue(ethers.toBeHex(baseSlot), 32)
-    );
-    const baseSlotNum = BigInt(startSlot);
+    consoleLog("getting struct type", vscode);
+    const slotMap = new Map<bigint, StorageDataType>();
+    const baseType = storageLayout.types[storage.type];
+    const baseSlot = storage.slot;
+    const label = storage.label;
 
-    const result: StorageDataType[] = [
-      {
-        slot: baseSlot.toString(),
-        value: length.toString(),
-        label: `${label}.length`,
-        noOfParents: depth,
-      },
-    ];
-
-    for (let i = 0; i < length; i++) {
-      const elemSlot = baseSlotNum + BigInt(i);
-      const val = await getStorageValue(elemSlot.toString());
-      result.push({
-        slot: elemSlot.toString(),
-        value: val,
-        label: `${label}[${i}]`,
-        noOfParents: depth + 1,
-      });
-    }
-
-    return result;
-  }
-
-  async function processFixedArray(
-    type: any,
-    baseSlot: bigint,
-    label: string,
-    depth: number
-  ): Promise<StorageDataType[]> {
-    const length = parseInt(type.label.match(/\[(\d+)\]$/)?.[1] || "0");
-    const result: StorageDataType[] = [];
-
-    for (let i = 0; i < length; i++) {
-      const val = await getStorageValue((baseSlot + BigInt(i)).toString());
-      result.push({
-        slot: (baseSlot + BigInt(i)).toString(),
-        value: val,
-        label: `${label}[${i}]`,
-        noOfParents: depth,
-      });
-    }
-
-    return result;
-  }
-
-  // Decode packed variables within a struct slot
-  function decodePackedStructValues(slotValue: string, structType: any) {
-    let offset = 0;
-    const decodedValues: any = {};
-
-    structType.members.forEach((member: any) => {
-      const memberType = member.type.trim();
-      const memberLabel = member.label;
-
-      if (memberType === "uint256") {
-        decodedValues[memberLabel] = ethers.toBigInt(
-          slotValue.slice(offset, offset + 64)
+    for (const member of baseType.members) {
+      consoleLog(`members : ${JSON.stringify(member, null, 2)}`, vscode);
+      const type = member.type;
+      consoleLog(`type : ${JSON.stringify(type, null, 2)}`, vscode);
+      const slot = toBigInt(parseInt(baseSlot) + parseInt(member.slot));
+      consoleLog(`slot : ${slot}`, vscode);
+      const isPackedType =
+        type.startsWith("t_bool") ||
+        type.startsWith("t_uint") ||
+        type.startsWith("t_int") ||
+        type.startsWith("t_address") ||
+        type.startsWith("t_enum");
+      consoleLog(`is packed : ${isPackedType}`, vscode);
+      consoleLog("here", vscode);
+      let dataArray;
+      if (isPackedType) {
+        consoleLog(
+          "getting uint or int or bool or address or enum value",
+          vscode
         );
-        offset += 64;
-      } else if (memberType === "uint128") {
-        decodedValues[memberLabel] = ethers.toBigInt(
-          slotValue.slice(offset, offset + 32)
+        if (slotMap.has(slot)) {
+          const existing = slotMap.get(slot)!;
+          existing.label += `, ${label}`;
+          slotMap.set(slot, existing);
+        } else {
+          const value = await getStorageValue(slot.toString());
+          consoleLog(`value is : ${value}`, vscode);
+          slotMap.set(slot, {
+            slot: slot.toString(),
+            label: label,
+            value: value,
+            noOfParents: 0,
+          });
+        }
+      } else if (type.startsWith("t_array") && type.endsWith("dyn_storage")) {
+        dataArray = await getDynamicArrayStorage(
+          storageLayout.types[storage.type],
+          slot,
+          label
         );
-        offset += 32;
+      } else if (type.startsWith("t_array") && type.endsWith("_storage")) {
+        dataArray = await getStaticArrayStorage(slot, label, type);
+      } else if (type.startsWith("t_mapping")) {
+        slotMap.set(slot, {
+          slot: slot.toString(),
+          label: label,
+          value: await getStorageValue(slot.toString()),
+          noOfParents: 0,
+        });
+      } else if (
+        type.startsWith("t_string_storage") ||
+        type.startsWith("t_bytes_storage")
+      ) {
+        dataArray = await getStringOrBytesStorage(slot, label);
+      } else if (type.startsWith("t_struct")) {
+        dataArray = await getStructStorage(storage, depth + 1);
       }
-      // Add cases for other types as necessary
-    });
-
-    return decodedValues;
+      if (dataArray !== undefined)
+        for (const data of dataArray) {
+          const slotKey = BigInt(data.slot);
+          slotMap.set(slotKey, data);
+        }
+    }
+    return Array.from(slotMap.values());
   }
 
-  async function processStruct(
+  async function getDynamicArrayStorage(
     type: any,
-    baseSlot: bigint,
-    label: string,
-    depth: number
+    baseSlot: any,
+    labelPrefix: string,
+    depth = 0
   ): Promise<StorageDataType[]> {
+    consoleLog("getting dynamic array values", vscode);
+    const base = `${type.base}`.trim();
     const result: StorageDataType[] = [];
-    let offsetSlot = baseSlot;
 
-    for (const member of type.members) {
-      const memberTypeId = member.type.trim();
-      const memberType = storageLayout.types[memberTypeId];
-      const memberLabel = `${label}.${member.label}`;
+    // Get array length
+    const rawLength = await getStorageValue(baseSlot);
+    result.push({
+      slot: `${baseSlot}`,
+      label: labelPrefix,
+      value: rawLength,
+      noOfParents: depth,
+    });
+    const length = parseInt(ethers.toBigInt(rawLength).toString());
+    const baseDataSlot = ethers.keccak256(toSlotHex(baseSlot));
 
-      if (memberType.label.startsWith("struct ")) {
-        const nested = await processStruct(
-          memberType,
-          offsetSlot,
-          memberLabel,
+    for (let i = 0; i < length; i++) {
+      const elementSlot = ethers.toBigInt(baseDataSlot) + BigInt(i);
+      const elementSlotStr = elementSlot.toString();
+
+      if (base.startsWith("t_array") && base.endsWith("dyn_storage")) {
+        const nested = await getDynamicArrayStorage(
+          storageLayout.types[type.base],
+          elementSlotStr,
+          `${labelPrefix}[${i}]`,
           depth + 1
         );
         result.push(...nested);
       } else {
-        const val = await getStorageValue(offsetSlot.toString());
-
-        // Check if the value is packed and decode
-        if (memberType.label.includes("packed")) {
-          const packedDecoded = decodePackedStructValues(val, memberType);
-          for (const [key, value] of Object.entries(packedDecoded)) {
-            result.push({
-              slot: offsetSlot.toString(),
-              value: `${value}`,
-              label: `${memberLabel}.${key}`,
-              noOfParents: depth,
-            });
-          }
+        // there is not filter for struct based dynamic array
+        if (storageLayout.types[base].encoding === "bytes") {
+          const data = await getStringOrBytesStorage(
+            ethers.toBigInt(elementSlotStr),
+            `${labelPrefix}[${i}]`,
+            depth + 1
+          );
+          result.push(...data);
         } else {
+          const value = await getStorageValue(elementSlotStr);
           result.push({
-            slot: offsetSlot.toString(),
-            value: val,
-            label: memberLabel,
-            noOfParents: depth,
+            slot: elementSlotStr,
+            label: `${labelPrefix}[${i}]`,
+            value: value,
+            noOfParents: depth + 1,
           });
         }
       }
-
-      offsetSlot += 1n;
     }
 
     return result;
   }
 
-  async function processStorage(
-    layout: any,
-    storageItems: any[],
-    depth = 0
-  ): Promise<StorageDataType[]> {
-    let result: StorageDataType[] = [];
+  async function getStorage(): Promise<StorageDataType[]> {
+    const slotMap = new Map<bigint, StorageDataType>();
 
-    for (const item of storageItems) {
-      const label = item.label;
-      const typeId = item.type.trim();
-      const slot = BigInt(item.slot);
-      const typeInfo = layout.types[typeId];
-      const typeLabel = typeInfo.label;
+    for (let i = 0; i < storageLayout.storage.length; i++) {
+      const storage = storageLayout.storage[i];
 
-      if (typeLabel.startsWith("struct ")) {
-        const nested = await processStruct(typeInfo, slot, label, depth + 1);
-        result.push(...nested);
-      } else if (
-        typeId.startsWith("t_array") &&
-        typeId.endsWith("dyn_storage")
-      ) {
-        const array = await processDynamicArray(slot, label, depth);
-        result.push(...array);
-      } else if (typeId.startsWith("t_array") && typeId.includes("_storage")) {
-        const array = await processFixedArray(typeInfo, slot, label, depth);
-        result.push(...array);
-      } else if (
-        typeId.includes("string") ||
-        typeId.includes("bytes_storage")
-      ) {
-        const val = await getDynamicBytesOrString(slot);
+      const type = `${storage.type}`.trim();
+      const slot = storage.slot;
+      const label = storage.label;
+      let dataArray;
 
-        result.push({
-          slot: slot.toString(),
-          value: val,
-          label,
-          noOfParents: depth,
+      // these types could be packed
+      const isPackedType =
+        type.startsWith("t_bool") ||
+        type.startsWith("t_uint") ||
+        type.startsWith("t_int") ||
+        type.startsWith("t_address") ||
+        type.startsWith("t_enum");
+
+      //normal type variables also could be packed
+      if (isPackedType) {
+        consoleLog(
+          "getting uint or int or bool or address or enum value",
+          vscode
+        );
+        if (slotMap.has(slot)) {
+          // Append label to existing entry
+          const existing = slotMap.get(slot)!;
+          existing.label += `, ${label}`;
+          slotMap.set(slot, existing); // Optional, as the object is mutated
+        } else {
+          const value = await getStorageValue(slot);
+          slotMap.set(slot, {
+            slot: slot,
+            label: label,
+            value: value,
+            noOfParents: 0,
+          });
+        }
+      } else if (type.startsWith("t_array") && type.endsWith("dyn_storage")) {
+        dataArray = await getDynamicArrayStorage(
+          storageLayout.types[storage.type],
+          slot,
+          label
+        );
+      } else if (type.startsWith("t_array") && type.endsWith("_storage")) {
+        dataArray = await getStaticArrayStorage(
+          storage.slot,
+          storage.label,
+          storage.type
+        );
+      } else if (type.startsWith("t_mapping")) {
+        slotMap.set(slot, {
+          slot: slot,
+          label: label,
+          value: await getStorageValue(slot),
+          noOfParents: 0,
         });
-      } else {
-        const val = await getStorageValue(slot.toString());
-        result.push({
-          slot: slot.toString(),
-          value: val,
-          label,
-          noOfParents: depth,
-        });
+      } else if (
+        type.startsWith("t_string_storage") ||
+        type.startsWith("t_bytes_storage")
+      ) {
+        dataArray = await getStringOrBytesStorage(slot, label);
+      } else if (type.startsWith("t_struct")) {
+        dataArray = await getStructStorage(storage);
       }
+
+      if (dataArray !== undefined)
+        for (const data of dataArray) {
+          const slotKey = BigInt(data.slot);
+          slotMap.set(slotKey, data);
+        }
     }
 
-    return result;
+    return Array.from(slotMap.values());
   }
 
   async function getStorageValue(slot: number | string): Promise<string> {
     const provider = new ethers.JsonRpcProvider("http://localhost:8545");
-
     const slotHex = toSlotHex(slot);
-
     return provider.getStorage(contractAddress, slotHex);
   }
 
   return (
-    <div className="p-4">
-      <h1 className="text-xl font-bold mb-4">Solidity Storage Inspector</h1>
-      <ul className="space-y-2">
-        {storageData.map((entry, i) => (
-          <li key={i} className="ml-4">
-            <strong>{entry.label}</strong> @ slot <code>{entry.slot}</code> →{" "}
-            <code>{entry.value}</code>
-          </li>
-        ))}
-      </ul>
+    <div style={{ padding: 20 }}>
+      <JsonView
+        value={nestedTree}
+        style={vscodeTheme}
+        shortenTextAfterLength={0}
+        collapsed={false}
+        displayObjectSize={false}
+        enableClipboard={false}
+        displayDataTypes={false}
+      />
     </div>
   );
 }
