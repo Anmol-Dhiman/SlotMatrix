@@ -1,0 +1,12 @@
+.heading {
+  margin-bottom: 12px;
+  font-weight: bold;
+}
+.copy-icon {
+  cursor: pointer;
+  transition: box-shadow 0.2s ease;
+}
+
+.copy-icon:hover {
+  box-shadow: 0 0 8px rgba(0, 123, 255, 0.6); /* blue glow effect */
+}

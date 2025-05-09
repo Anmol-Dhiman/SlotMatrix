@@ -1,7 +1,7 @@
 import {
   VscodeButton,
-  VscodeDivider,
   VscodeOption,
+  VscodeScrollable,
   VscodeSingleSelect,
   VscodeTabHeader,
   VscodeTabPanel,
@@ -13,7 +13,13 @@ import "./App.css";
 import { AnvilKeys } from "../utils/AnvilKeys";
 import { useEffect, useState } from "react";
 import { MessageId, Terminals, VSCodeMessage } from "../../src/MessageId";
-import { ABIEntry, FuncState, DeployedContract, LogData } from "../utils/Types";
+import {
+  ABIEntry,
+  FuncState,
+  DeployedContract,
+  LogData,
+  WalletData,
+} from "../utils/Types";
 import { ethers } from "ethers";
 
 import {
@@ -46,47 +52,52 @@ export const vscode = isVSCode
 const ETHFormat = ["wei", "kwei", "mwei", "gwei", "szabo", "finney", "ether"];
 
 function App() {
-  const [currentWallet, setCurrentWallet] = useState(0); // current private key from anvil wallet accounts
-  const [wallets] = useState(AnvilKeys);
+  /*//////////////////////////////////////////////////////////////
+                              WALLET DATA
+    //////////////////////////////////////////////////////////////*/
+
+  const [currentWallet, setCurrentWallet] = useState(0);
+  const [wallets, setWalletData] = useState<WalletData[]>(AnvilKeys);
+
+  /*//////////////////////////////////////////////////////////////
+                             CONTRACT FILES
+    //////////////////////////////////////////////////////////////*/
   const [pwd, setPwd] = useState(); // current working directory
-  const [refreshTick, setRefreshTick] = useState(0);
-
-  const [contractFiles, setContractFiles] =
-    useState<
-      { contractName: string; contractFilePath: string; basename: string }[]
-    >(); // deployable contracts sources from {pwd}/src folder
-
-  const [currentContract, setCurrentContract] = useState<{
-    contractName: string;
-    contractFilePath: string;
-    basename: string;
-  }>(); // current contract to deploy
+  const [contractFiles, setContractFiles] = useState<
+    { contractName: string; contractFilePath: string; basename: string }[]
+  >([]); // deployable contracts sources from {pwd}/src folder
+  const [currentContractFileIndex, setCurrentContractFileIndex] = useState(0); // current contract to deploy
   const [currentContractJsonData, setCurrentContractJsonData] =
     useState<any>(null); // current contract json data (abi, bytecode,...etc) from {pwd}/out folder
+  const [constructorInputs, setConstructorInputs] = useState<FuncState>();
+  const [deployedContract, setDeployedContract] = useState<DeployedContract[]>(
+    []
+  );
 
+  /*//////////////////////////////////////////////////////////////
+                               ETH INPUT
+    //////////////////////////////////////////////////////////////*/
   const [ethValue, setEthValue] = useState<string>(""); // default eth value to send with the transaction
   const [ethFormat, setEthFormat] = useState<string>(
     ETHFormat[0].toUpperCase()
   ); // default format to send with the transaction
 
-  const [constructorInputs, setConstructorInputs] = useState<FuncState>();
-
-  const [deployedContract, setDeployedContract] = useState<DeployedContract[]>(
-    []
-  );
+  const [refreshTick, setRefreshTick] = useState(0);
 
   window.addEventListener("message", (event) => {
     const { id, data } = event.data;
     if (id === MessageId.getSolFiles) {
       setContractFiles(data);
-      setCurrentContract(data[0]);
-    }
-    if (id === MessageId.getCurrentWorkingDirectory) {
+      consoleLog(JSON.stringify(data, null, 2));
+    } else if (id === MessageId.getCurrentWorkingDirectory) {
       setPwd(data);
-    }
-    if (id === MessageId.getAbi) {
+    } else if (id === MessageId.getAbi) {
       setCurrentContractJsonData(data);
       setConstructorInputs(buildInitialConstructorState(data.abi[0])); // setting constructor input state
+    } else if (id === MessageId.buildCommandRunSuccess) {
+      getAbiMessage();
+    } else if (id === MessageId.buildCommandFailed) {
+      // TODO build failed
     }
   });
 
@@ -120,12 +131,16 @@ function App() {
 
   useEffect(() => {
     vscode.postMessage({
+      id: MessageId.runBuildCommand,
+    });
+
+    vscode.postMessage({
       id: MessageId.getSolFiles,
     });
     vscode.postMessage({
       id: MessageId.getCurrentWorkingDirectory,
     });
-
+    getAbiMessage();
     vscode.postMessage({
       id: MessageId.createTerminal,
       data: Terminals.anvilTerminal,
@@ -133,19 +148,23 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (currentContract === undefined || pwd === undefined) return;
+    getAbiMessage();
+  }, [currentContractFileIndex, pwd]);
+
+  const getAbiMessage = () => {
+    if (pwd === undefined) return;
 
     vscode.postMessage({
       id: MessageId.getAbi,
       data:
         pwd +
         "/out/" +
-        currentContract.basename +
+        contractFiles[currentContractFileIndex].basename +
         "/" +
-        currentContract.contractName +
+        contractFiles[currentContractFileIndex].contractName +
         ".json",
     });
-  }, [currentContract, pwd]);
+  };
 
   function handleInputChange(index: number, value: string) {
     setConstructorInputs((prevState: FuncState | undefined) => {
@@ -161,10 +180,11 @@ function App() {
   }
 
   async function handleDeploy() {
-    consoleLog("deploy funciton", vscode);
-    if (currentContract === undefined || pwd === undefined) return;
+    consoleLog("deploy function");
+    if (pwd === undefined) return;
     else {
-      constructorInputs?.inputs.forEach((input) => {
+      consoleLog(`${JSON.stringify(constructorInputs?.inputs[0].value)}`);
+      constructorInputs?.inputs.map((input) => {
         if (input.value === "") {
           vscode.postMessage({
             id: MessageId.showMessage,
@@ -176,6 +196,8 @@ function App() {
           return;
         }
       });
+
+      consoleLog("hello world");
 
       const provider = new ethers.JsonRpcProvider("http://localhost:8545");
       const wallet = new ethers.Wallet(
@@ -199,9 +221,13 @@ function App() {
         ...parseConstructorArgs(constructorInputs?.inputs || []),
         value
       );
+      consoleLog(JSON.stringify(contract));
+
+      if (constructorInputs?.stateMutability === "payable")
+        updateWalletBalance();
 
       const newContract: DeployedContract = {
-        name: currentContract.contractName,
+        name: contractFiles[currentContractFileIndex].contractName,
         address: await contract.getAddress(),
         functions: buildFunctionStatesFromABI(currentContractJsonData.abi),
         abi: currentContractJsonData.abi,
@@ -293,7 +319,7 @@ function App() {
     const contractWithSigner = contract.connect(signer);
     const iff = new ethers.Interface(abi);
 
-    consoleLog(JSON.stringify(functionData), vscode);
+    consoleLog(JSON.stringify(functionData));
 
     // Prepare arguments
     const args = parseConstructorArgs(functionData.inputs);
@@ -306,7 +332,7 @@ function App() {
       functionData.stateMutability === "pure"
     ) {
       result = await contract[functionData.name](...args);
-      consoleLog(`value is ${result}`, vscode);
+      consoleLog(`value is ${result}`);
       setDeployedContract((prev) =>
         updateOutputValue(prev, contractIndex, functionIndex, `${result}`)
       );
@@ -337,7 +363,8 @@ function App() {
         value: parseEthValue(ethValue, ethFormat),
       });
       setRefreshTick((prev) => prev + 1);
-      consoleLog(`value is ${decodedOutput}`, vscode);
+      consoleLog(`value is ${decodedOutput}`);
+      updateWalletBalance();
       return;
     }
     // If function is nonpayable (regular transaction)
@@ -393,130 +420,278 @@ function App() {
       if (log !== undefined)
         setDeployedContract((prev) => updateLogData(prev, contractIndex, log));
       setRefreshTick((prev) => prev + 1);
-      consoleLog("call successful", vscode);
+      consoleLog("call successful");
     }
   }
+
+  const updateWalletBalance = () => {
+    setWalletData((prevWallets) => {
+      const updatedWallets = [...prevWallets];
+      const current = updatedWallets[currentWallet];
+      updatedWallets[currentWallet] = {
+        ...current,
+        balance:
+          current.balance -
+          Number(ethers.formatEther(parseEthValue(ethValue, ethFormat))), // subtract the sent amount
+      };
+
+      return updatedWallets;
+    });
+  };
+
+  const handleCopy = async (address: string) => {
+    try {
+      await navigator.clipboard.writeText(address);
+    } catch (err) {
+      consoleLog(`${err}`);
+    }
+  };
 
   return (
     <div>
       <h1>SlotMatrix</h1>
       <p>Code. Deploy. Inspect. All in One Matrix.</p>
-      <VscodeDivider />
 
-      {/* wallets */}
-      <div>
-        <p>Wallets</p>
-        <VscodeSingleSelect
-          onChange={(event) => {
-            setCurrentWallet(
-              parseInt((event.target as HTMLSelectElement).value)
-            );
-          }}
-        >
-          {wallets.map((account, index) => (
-            <VscodeOption key={index} value={index.toString()}>
-              {account.publicKey.slice(0, 6) +
-                "..." +
-                account.publicKey.slice(-6) +
-                `  (${account.balance} ETH)`}
-            </VscodeOption>
-          ))}
-        </VscodeSingleSelect>
-      </div>
-      {/* deployable contract  */}
-      <div>
-        <p>Deployable Contract</p>
-        <VscodeSingleSelect
-          onChange={(event) => {
-            setCurrentContract(
-              JSON.parse((event.target as HTMLSelectElement).value)
-            );
-          }}
-          style={{ marginBottom: "10px" }}
-        >
-          {contractFiles !== undefined &&
-            contractFiles.map((file, index) => (
-              <VscodeOption key={index} value={JSON.stringify(file)}>
-                {file.basename + ":" + file.contractName}
-              </VscodeOption>
-            ))}
-        </VscodeSingleSelect>
-      </div>
-      {/* eth value  */}
-      {constructorInputs !== undefined && (
-        <div>
-          <p>ETH Value</p>
-          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+      {/* deployment and logs  */}
+      <div
+        style={{
+          width: "100%",
+          display: "flex",
+          flexDirection: "row",
+          height: "500px",
+        }}
+      >
+        <VscodeScrollable style={{ width: "25%", paddingRight: "12px" }}>
+          <div>
+            {/* wallets  */}
+            <div className="heading">Wallets</div>
+            <VscodeSingleSelect
+              value={currentWallet.toString()}
+              onChange={(event) => {
+                setCurrentWallet(
+                  parseInt((event.target as HTMLSelectElement).value)
+                );
+              }}
+              style={{ marginBottom: "12px" }}
+            >
+              {wallets.map((account, index) => (
+                <VscodeOption
+                  key={`${account.publicKey}-${account.balance}`}
+                  value={index.toString()}
+                  selected={index === currentWallet}
+                >
+                  {`${account.publicKey.slice(
+                    0,
+                    6
+                  )}...${account.publicKey.slice(-6)}  (${
+                    account.balance
+                  } ETH)`}
+                </VscodeOption>
+              ))}
+            </VscodeSingleSelect>
+          </div>
+
+          {/* deployable contract  */}
+          <div>
+            <div className="heading">Deployable Contract</div>
+            <VscodeSingleSelect
+              onChange={(event) => {
+                setCurrentContractFileIndex(
+                  JSON.parse((event.target as HTMLSelectElement).value)
+                );
+              }}
+              style={{ marginBottom: "12px" }}
+            >
+              {contractFiles.length !== 0 &&
+                contractFiles.map((file, index) => (
+                  <VscodeOption key={index} value={index.toString()}>
+                    {file.basename + ":" + file.contractName}
+                  </VscodeOption>
+                ))}
+            </VscodeSingleSelect>
+          </div>
+
+          {/* eth value  */}
+          <div>
+            <div className="heading">ETH Value</div>
             <VscodeTextfield
               type="number"
               value={ethValue}
+              min={0}
               placeholder="ETH Value"
-              style={{ width: "20%" }}
               onChange={(event) => {
-                setEthValue((event.target as HTMLInputElement).value);
+                const value = Number((event.target as HTMLInputElement).value);
+                setEthValue(value.toString());
               }}
+              style={{ marginBottom: "12px" }}
             />
 
-            <VscodeSingleSelect
-              onChange={(event) => {
-                setEthFormat((event.target as HTMLSelectElement).value);
-              }}
-            >
-              {ETHFormat.map((format, index) => {
-                return (
-                  <VscodeOption key={index} value={format}>
-                    {format.toLocaleUpperCase()}
-                  </VscodeOption>
-                );
-              })}
-            </VscodeSingleSelect>
+            <div>
+              <VscodeSingleSelect
+                onChange={(event) => {
+                  setEthFormat((event.target as HTMLSelectElement).value);
+                }}
+                style={{ marginBottom: "12px" }}
+              >
+                {ETHFormat.map((format, index) => {
+                  return (
+                    <VscodeOption key={index} value={format}>
+                      {format.toLocaleUpperCase()}
+                    </VscodeOption>
+                  );
+                })}
+              </VscodeSingleSelect>
+            </div>
           </div>
-        </div>
-      )}
-      {/* constructor inputs */}
-      {constructorInputs !== undefined &&
-        constructorInputs.inputs.length > 0 && (
-          <div>
-            <p>Constructor Input</p>
-            {constructorInputs.inputs.map((input, index) => {
-              return (
-                <VscodeTextfield
-                  key={index}
-                  type="number"
-                  value={input.value}
-                  placeholder={input.name}
-                  style={{ marginBottom: "8px", width: "20%" }}
-                  onChange={(event) => {
-                    handleInputChange(
-                      index,
-                      (event.target as HTMLInputElement).value
-                    );
-                  }}
-                />
-              );
-            })}
-          </div>
-        )}
-      {/* deploy button */}
-      <div>
-        <VscodeButton
-          onClick={handleDeploy}
+
+          {/* constructor inputs */}
+          {constructorInputs !== undefined &&
+            constructorInputs.inputs.length > 0 && (
+              <div>
+                <div className="heading">Constructor Input</div>
+                {constructorInputs.inputs.map((input, index) => {
+                  return (
+                    <>
+                      <div style={{ marginBottom: "4px" }}>{input.name} : </div>
+                      <VscodeTextfield
+                        key={index}
+                        value={input.value}
+                        placeholder={input.type}
+                        onChange={(event) => {
+                          handleInputChange(
+                            index,
+                            (event.target as HTMLInputElement).value
+                          );
+                        }}
+                        style={{ marginBottom: "12px" }}
+                      />
+                    </>
+                  );
+                })}
+              </div>
+            )}
+          {/* deploy button */}
+
+          <VscodeButton
+            onClick={handleDeploy}
+            style={{
+              backgroundColor:
+                constructorInputs?.stateMutability === "payable"
+                  ? "#cb0303"
+                  : undefined,
+              width: "100%",
+              boxSizing: "border-box",
+            }}
+          >
+            Deploy
+          </VscodeButton>
+        </VscodeScrollable>
+
+        <div
           style={{
-            backgroundColor:
-              constructorInputs?.stateMutability === "payable"
-                ? "#cb0303"
-                : undefined,
-            marginBottom: "8px",
-            marginTop: "4px",
-            width: "20%",
+            width: "75%",
+            borderLeft: "1px solid gray",
+            paddingLeft: "12px",
+            display: "flex",
+            flexDirection: "column",
           }}
         >
-          Deploy
-        </VscodeButton>
+          <div className="heading">Logs</div>
+
+          <VscodeScrollable style={{ height: "450px" }}>
+            Lorem ipsum dolor sit amet consectetur adipisicing elit. Deserunt
+            architecto quisquam nemo, nulla beatae debitis soluta numquam, magni
+            ab in harum. Voluptate doloribus voluptatum, repellendus atque
+            molestias accusantium natus expedita. Lorem ipsum dolor sit amet
+            consectetur adipisicing elit. Deserunt architecto quisquam nemo,
+            nulla beatae debitis soluta numquam, magni ab in harum. Voluptate
+            doloribus voluptatum, repellendus atque molestias accusantium natus
+            expedita.Lorem ipsum dolor sit amet consectetur adipisicing elit.
+            Deserunt architecto quisquam nemo, nulla beatae debitis soluta
+            numquam, magni ab in harum. Voluptate doloribus voluptatum,
+            repellendus atque molestias accusantium natus expedita.Lorem ipsum
+            dolor sit amet consectetur adipisicing elit. Deserunt architecto
+            quisquam nemo, nulla beatae debitis soluta numquam, magni ab in
+            harum. Voluptate doloribus voluptatum, repellendus atque molestias
+            accusantium natus expedita.Lorem ipsum dolor sit amet consectetur
+            adipisicing elit. Deserunt architecto quisquam nemo, nulla beatae
+            debitis soluta numquam, magni ab in harum. Voluptate doloribus
+            voluptatum, repellendus atque molestias accusantium natus
+            expedita.Lorem ipsum dolor sit amet consectetur adipisicing elit.
+            Deserunt architecto quisquam nemo, nulla beatae debitis soluta
+            numquam, magni ab in harum. Voluptate doloribus voluptatum,
+            repellendus atque molestias accusantium natus expedita. Lorem ipsum
+            dolor sit amet consectetur adipisicing elit. Deserunt architecto
+            quisquam nemo, nulla beatae debitis soluta numquam, magni ab in
+            harum. Voluptate doloribus voluptatum, repellendus atque molestias
+            accusantium natus expedita. Lorem ipsum dolor sit amet consectetur
+            adipisicing elit. Deserunt architecto quisquam nemo, nulla beatae
+            debitis soluta numquam, magni ab in harum. Voluptate doloribus
+            voluptatum, repellendus atque molestias accusantium natus
+            expedita.Lorem ipsum dolor sit amet consectetur adipisicing elit.
+            Deserunt architecto quisquam nemo, nulla beatae debitis soluta
+            numquam, magni ab in harum. Voluptate doloribus voluptatum,
+            repellendus atque molestias accusantium natus expedita.Lorem ipsum
+            dolor sit amet consectetur adipisicing elit. Deserunt architecto
+            quisquam nemo, nulla beatae debitis soluta numquam, magni ab in
+            harum. Voluptate doloribus voluptatum, repellendus atque molestias
+            accusantium natus expedita.Lorem ipsum dolor sit amet consectetur
+            adipisicing elit. Deserunt architecto quisquam nemo, nulla beatae
+            debitis soluta numquam, magni ab in harum. Voluptate doloribus
+            voluptatum, repellendus atque molestias accusantium natus
+            expedita.Lorem ipsum dolor sit amet consectetur adipisicing elit.
+            Deserunt architecto quisquam nemo, nulla beatae debitis soluta
+            numquam, magni ab in harum. Voluptate doloribus voluptatum,
+            repellendus atque molestias accusantium natus expedita. Lorem ipsum
+            dolor sit amet consectetur adipisicing elit. Deserunt architecto
+            quisquam nemo, nulla beatae debitis soluta numquam, magni ab in
+            harum. Voluptate doloribus voluptatum, repellendus atque molestias
+            accusantium natus expedita. Lorem ipsum dolor sit amet consectetur
+            adipisicing elit. Deserunt architecto quisquam nemo, nulla beatae
+            debitis soluta numquam, magni ab in harum. Voluptate doloribus
+            voluptatum, repellendus atque molestias accusantium natus
+            expedita.Lorem ipsum dolor sit amet consectetur adipisicing elit.
+            Deserunt architecto quisquam nemo, nulla beatae debitis soluta
+            numquam, magni ab in harum. Voluptate doloribus voluptatum,
+            repellendus atque molestias accusantium natus expedita.Lorem ipsum
+            dolor sit amet consectetur adipisicing elit. Deserunt architecto
+            quisquam nemo, nulla beatae debitis soluta numquam, magni ab in
+            harum. Voluptate doloribus voluptatum, repellendus atque molestias
+            accusantium natus expedita.Lorem ipsum dolor sit amet consectetur
+            adipisicing elit. Deserunt architecto quisquam nemo, nulla beatae
+            debitis soluta numquam, magni ab in harum. Voluptate doloribus
+            voluptatum, repellendus atque molestias accusantium natus
+            expedita.Lorem ipsum dolor sit amet consectetur adipisicing elit.
+            Deserunt architecto quisquam nemo, nulla beatae debitis soluta
+            numquam, magni ab in harum. Voluptate doloribus voluptatum,
+            repellendus atque molestias accusantium natus expedita. Lorem ipsum
+            dolor sit amet consectetur adipisicing elit. Deserunt architecto
+            quisquam nemo, nulla beatae debitis soluta numquam, magni ab in
+            harum. Voluptate doloribus voluptatum, repellendus atque molestias
+            accusantium natus expedita. Lorem ipsum dolor sit amet consectetur
+            adipisicing elit. Deserunt architecto quisquam nemo, nulla beatae
+            debitis soluta numquam, magni ab in harum. Voluptate doloribus
+            voluptatum, repellendus atque molestias accusantium natus
+            expedita.Lorem ipsum dolor sit amet consectetur adipisicing elit.
+            Deserunt architecto quisquam nemo, nulla beatae debitis soluta
+            numquam, magni ab in harum. Voluptate doloribus voluptatum,
+            repellendus atque molestias accusantium natus expedita.Lorem ipsum
+            dolor sit amet consectetur adipisicing elit. Deserunt architecto
+            quisquam nemo, nulla beatae debitis soluta numquam, magni ab in
+            harum. Voluptate doloribus voluptatum, repellendus atque molestias
+            accusantium natus expedita.Lorem ipsum dolor sit amet consectetur
+            adipisicing elit. Deserunt architecto quisquam nemo, nulla beatae
+            debitis soluta numquam, magni ab in harum. Voluptate doloribus
+            voluptatum, repellendus atque molestias accusantium natus
+            expedita.Lorem ipsum dolor sit amet consectetur adipisicing elit.
+            Deserunt architecto quisquam nemo, nulla beatae debitis soluta
+            numquam, magni ab in harum. Voluptate doloribus voluptatum,
+            repellendus atque molestias accusantium natus expedita.
+          </VscodeScrollable>
+        </div>
       </div>
 
       {/* functions of contract and intraction  */}
-
       <VscodeTabs>
         {deployedContract.map((contractData, contractIndex) => (
           <>
@@ -529,10 +704,10 @@ function App() {
                   gap: "4px",
                 }}
               >
-                <p>{contractData.name}</p>
+                <div>{contractData.name}</div>
                 <div
                   className="icon"
-                  style={{ paddingTop: "4px" }}
+                  style={{ paddingTop: "4px", cursor: "pointer" }}
                   onClick={() => handleCloseContractTab(contractIndex)}
                 >
                   <i className="codicon codicon-close"></i>
@@ -542,37 +717,50 @@ function App() {
             <VscodeTabPanel>
               <div
                 style={{
+                  width: "100%",
                   display: "flex",
                   flexDirection: "row",
+                  marginTop: "32px",
                 }}
               >
-                <div
-                  style={{
-                    width: "25%",
-                  }}
-                >
-                  <p
+                <div style={{ width: "25%", paddingRight: "12px" }}>
+                  {/* funciton intraction  */}
+                  <div className="heading">Contract Intraction</div>
+                  <div
                     style={{
-                      wordBreak: "break-all",
-                      whiteSpace: "normal",
-                      overflowWrap: "break-word",
+                      marginBottom: "12px",
+                      display: "flex",
+                      flexDirection: "row",
                     }}
                   >
-                    {"Address : " + contractData.address}
-                  </p>
+                    <div>
+                      {`${contractData.address.slice(
+                        0,
+                        6
+                      )}...${contractData.address.slice(-6)}`}
+                    </div>
+                    <div
+                      className="icon "
+                      style={{ marginLeft: "4px", cursor: "pointer" }}
+                      onClick={() => handleCopy(contractData.address)}
+                    >
+                      <i className="codicon codicon-copy copy-icon"></i>
+                    </div>
+                  </div>
                   <div>
                     {contractData.functions.map(
                       (functionData, functionIndex) => (
                         <div key={functionIndex}>
-                          <p>{functionData.name}</p>
                           <div>
                             {functionData.inputs.map((input, inputIndex) => (
                               <div key={inputIndex}>
+                                <div style={{ marginBottom: "4px" }}>
+                                  {input.name} :
+                                </div>
                                 <VscodeTextfield
-                                  type="number"
                                   value={input.value}
-                                  style={{ marginBottom: "8px", width: "20%" }}
-                                  placeholder={input.name}
+                                  style={{ marginBottom: "12px" }}
+                                  placeholder={input.type}
                                   onChange={(event) => {
                                     const newValue = (
                                       event.target as HTMLInputElement
@@ -600,7 +788,9 @@ function App() {
                                     "nonpayable"
                                   ? "#fc8330"
                                   : undefined,
-                              width: "20%",
+                              width: "100%",
+                              boxSizing: "border-box",
+                              marginBottom: "12px",
                             }}
                             onClick={() =>
                               handleFunctionCall(
@@ -612,30 +802,31 @@ function App() {
                               )
                             }
                           >
-                            call
+                            {functionData.name}
                           </VscodeButton>
-                          <div>{functionData.outputs}</div>
+                          <div style={{ marginBottom: "12px" }}>
+                            {functionData.outputs}
+                          </div>
                         </div>
                       )
                     )}
                   </div>
                 </div>
-
-                <div style={{ width: "75%" }}>
+                <div
+                  style={{
+                    width: "75%",
+                    borderLeft: "1px solid gray",
+                    paddingLeft: "12px",
+                  }}
+                >
+                  {/* storage layout  */}
+                  <div className="heading">Storage Layout</div>
                   <StorageLayout
                     storageLayout={currentContractJsonData.storageLayout}
                     refreshTick={refreshTick}
                     contractAddress={deployedContract[contractIndex].address}
                   />
                 </div>
-
-                {/* <div
-                  style={{
-                    width: "37.5%",
-                  }}
-                >
-                  <Log logData={contractData.logs || []} />
-                </div> */}
               </div>
             </VscodeTabPanel>
           </>

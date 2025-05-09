@@ -47,3 +47,9 @@ export type LogData = {
   decodedOutput: Record<string, any>;
   logs?: any[];
 };
+
+export type WalletData = {
+  privateKey: string;
+  publicKey: string;
+  balance: number;
+};

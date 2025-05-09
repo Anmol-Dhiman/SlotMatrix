@@ -2,8 +2,9 @@ import { MessageId } from "../../src/MessageId";
 import { isAddress, ethers } from "ethers";
 import { Input, LogData } from "./Types";
 import { TransactionResponse, TransactionReceipt } from "ethers";
+import { vscode } from "../src/App";
 
-export function consoleLog(message: string, vscode: any) {
+export function consoleLog(message: string) {
   vscode.postMessage({
     id: MessageId.log,
     data: message,

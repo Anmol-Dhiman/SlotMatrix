@@ -11,6 +11,9 @@ export const MessageId = {
   disposeTerminal: "disposeTerminal",
   isTerminalRunning: "isTerminalRunning",
   terminalOutput: "terminalOutput",
+  runBuildCommand: "runBuildCommand",
+  buildCommandRunSuccess: "buildCommandRunSuccess",
+  buildCommandFailed: "buildCommandFailed",
 
   // file data
   getSolFiles: "getSolFiles",

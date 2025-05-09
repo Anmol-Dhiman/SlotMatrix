@@ -6,11 +6,12 @@ import { exec } from "child_process";
 
 let anvilTerminal: vscode.Terminal | undefined;
 let commandTerminal: vscode.Terminal | undefined;
+let panel: vscode.WebviewPanel;
 
 export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.commands.registerCommand("slotmatrix.panelView", () => {
-      const panel = vscode.window.createWebviewPanel(
+      panel = vscode.window.createWebviewPanel(
         "slotmatrix",
         "SlotMatrix",
         vscode.ViewColumn.One,
@@ -57,6 +58,9 @@ export function activate(context: vscode.ExtensionContext) {
             // ---- TERMINAL ----
             case MessageId.runCommand:
               runCommand(message.data);
+              break;
+            case MessageId.runBuildCommand:
+              runBuildCommand();
               break;
             case MessageId.createTerminal:
               if (
@@ -158,27 +162,59 @@ export function activate(context: vscode.ExtensionContext) {
   );
 }
 
-function runCommand(command: string) {
+function runBuildCommand() {
   const workspaceFolders = vscode.workspace.workspaceFolders;
-
   if (!workspaceFolders || workspaceFolders.length === 0) {
     vscode.window.showErrorMessage("No workspace folder open");
     return;
   }
+  exec("forge clean", { cwd: workspaceFolders[0].uri.fsPath });
+  exec(
+    "forge build --extra-output storageLayout",
+    { cwd: workspaceFolders[0].uri.fsPath },
+    (error, stdout, stderr) => {
+      if (error) {
+        console.log("log : error", error);
+        vscode.window.showErrorMessage(`Contract Build Failed : ${error}`);
+        commandTerminal = vscode.window.createTerminal({
+          name: "SlotMatrix Command Terminal",
+        });
+        commandTerminal.show();
+        commandTerminal.sendText("forge build --extra-output storageLayout");
+        panel.webview.postMessage({
+          id: MessageId.buildCommandFailed,
+        });
+        return;
+      }
 
+      console.log("log : output", stdout);
+      vscode.window.showInformationMessage(
+        `Contract build successful : ${stdout}`
+      );
+      panel.webview.postMessage({
+        id: MessageId.buildCommandRunSuccess,
+      });
+      return;
+    }
+  );
+}
+
+function runCommand(command: string) {
+  const workspaceFolders = vscode.workspace.workspaceFolders;
+  if (!workspaceFolders || workspaceFolders.length === 0) {
+    vscode.window.showErrorMessage("No workspace folder open");
+    return;
+  }
   exec(
     command,
     { cwd: workspaceFolders[0].uri.fsPath },
     (error, stdout, stderr) => {
       if (error) {
-        console.log("log : ", error);
+        console.log("log : error", error);
         return;
       }
-      if (stderr) {
-        console.log("log : ", stderr);
-        return;
-      }
-      console.log("log : ", stdout);
+      console.log("log : output", stdout);
+      return;
     }
   );
 }
