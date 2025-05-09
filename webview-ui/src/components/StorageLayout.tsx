@@ -32,7 +32,7 @@ function StorageLayout({
   useEffect(() => {
     (async () => {
       const result = await getStorage();
-      consoleLog(`storage result ${JSON.stringify(result, null, 2)}`);
+
       setNestedTree(buildNestedTree(result));
     })();
   }, [refreshTick]);

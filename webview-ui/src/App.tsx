@@ -1,5 +1,6 @@
 import {
   VscodeButton,
+  VscodeDivider,
   VscodeOption,
   VscodeScrollable,
   VscodeSingleSelect,
@@ -27,10 +28,12 @@ import {
   parseConstructorArgs,
   buildLogData,
   parseEthValue,
+  showError,
 } from "../utils/HelperFunc";
 import "@vscode/codicons/dist/codicon.css";
 // import Log from "./components/Log";
 import StorageLayout from "./components/StorageLayout";
+import Log from "./components/Log";
 
 declare function acquireVsCodeApi(): {
   postMessage: (message: any) => void;
@@ -82,7 +85,8 @@ function App() {
     ETHFormat[0].toUpperCase()
   ); // default format to send with the transaction
 
-  const [refreshTick, setRefreshTick] = useState(0);
+  const [logData, setLogData] = useState<LogData[]>([]);
+  const [atAddress, setAtAddress] = useState("");
 
   window.addEventListener("message", (event) => {
     const { id, data } = event.data;
@@ -181,25 +185,32 @@ function App() {
 
   async function handleDeploy() {
     consoleLog("deploy function");
-    if (pwd === undefined) return;
-    else {
-      consoleLog(`${JSON.stringify(constructorInputs?.inputs[0].value)}`);
-      constructorInputs?.inputs.map((input) => {
+    if (pwd === undefined) {
+      return;
+    } else {
+      //need to check for the state of anvilTerminal
+
+      if (BigInt(ethValue) < 0) {
+        showError("Eth value cannot be negative");
+        return;
+      }
+      if (
+        constructorInputs?.stateMutability === "nonpayable" &&
+        BigInt(ethValue) > 0
+      ) {
+        showError("Non-payable constructor");
+        return;
+      }
+
+      for (const input of constructorInputs?.inputs || []) {
         if (input.value === "") {
-          vscode.postMessage({
-            id: MessageId.showMessage,
-            data: {
-              id: VSCodeMessage.error,
-              message: `Please fill the ${input.name} input`,
-            },
-          });
+          showError(`Please fill the ${input.name} input`);
           return;
         }
-      });
-
-      consoleLog("hello world");
+      }
 
       const provider = new ethers.JsonRpcProvider("http://localhost:8545");
+
       const wallet = new ethers.Wallet(
         wallets[currentWallet].privateKey,
         provider
@@ -217,20 +228,35 @@ function App() {
               value: parseEthValue(ethValue, ethFormat),
             }
           : {};
-      const contract = await factory.deploy(
-        ...parseConstructorArgs(constructorInputs?.inputs || []),
-        value
-      );
-      consoleLog(JSON.stringify(contract));
+
+      const args = parseConstructorArgs(constructorInputs?.inputs || []);
+
+      // failed to parse the constructor args
+      if (args.length !== (constructorInputs?.inputs?.length || 0)) {
+        //no need to show the error message here, as error message is already shown while parsing
+        return;
+      }
+
+      let contract;
+
+      try {
+        contract = await factory.deploy(...args, value);
+      } catch (err) {
+        showError(`Deployment failed due to : ${err}`);
+        consoleLog(`error: ${JSON.stringify(err, null, 2)}`);
+        return;
+      }
 
       if (constructorInputs?.stateMutability === "payable")
         updateWalletBalance();
 
       const newContract: DeployedContract = {
         name: contractFiles[currentContractFileIndex].contractName,
-        address: await contract.getAddress(),
+        address: (await contract?.getAddress()) || "",
         functions: buildFunctionStatesFromABI(currentContractJsonData.abi),
         abi: currentContractJsonData.abi,
+        storageLayout: currentContractJsonData.storageLayout,
+        refreshTick: 0,
       };
 
       setDeployedContract((prev) => [...prev, newContract]);
@@ -279,21 +305,6 @@ function App() {
     updated[contractIndex].functions[functionIndex] = {
       ...updated[contractIndex].functions[functionIndex],
       outputs: newValue,
-    };
-
-    return updated;
-  }
-
-  function updateLogData(
-    prev: DeployedContract[],
-    contractIndex: number,
-    newLog: LogData
-  ): DeployedContract[] {
-    const updated = [...prev];
-
-    updated[contractIndex] = {
-      ...updated[contractIndex],
-      logs: [...(updated[contractIndex].logs || []), newLog],
     };
 
     return updated;
@@ -362,7 +373,13 @@ function App() {
       result = await (contractWithSigner as any)[functionData.name](...args, {
         value: parseEthValue(ethValue, ethFormat),
       });
-      setRefreshTick((prev) => prev + 1);
+      setDeployedContract((prevContracts) =>
+        prevContracts.map((contract) =>
+          contract.address === contractAddress
+            ? { ...contract, refreshTick: contract.refreshTick + 1 }
+            : contract
+        )
+      );
       consoleLog(`value is ${decodedOutput}`);
       updateWalletBalance();
       return;
@@ -417,9 +434,14 @@ function App() {
         rawOutput,
         decodedOutput
       );
-      if (log !== undefined)
-        setDeployedContract((prev) => updateLogData(prev, contractIndex, log));
-      setRefreshTick((prev) => prev + 1);
+      if (log !== undefined) setLogData((prev) => [...prev, log]);
+      setDeployedContract((prevContracts) =>
+        prevContracts.map((contract) =>
+          contract.address === contractAddress
+            ? { ...contract, refreshTick: contract.refreshTick + 1 }
+            : contract
+        )
+      );
       consoleLog("call successful");
     }
   }
@@ -447,6 +469,25 @@ function App() {
     }
   };
 
+  const handleAtAddress = () => {
+    if (atAddress === "") {
+      showError("Enter the contract address");
+      return;
+    } else if (!ethers.isAddress(atAddress)) {
+      showError(`${atAddress} is not a valid contract address.`);
+      return;
+    }
+    const newContract: DeployedContract = {
+      name: contractFiles[currentContractFileIndex].contractName,
+      address: atAddress,
+      functions: buildFunctionStatesFromABI(currentContractJsonData.abi),
+      abi: currentContractJsonData.abi,
+      storageLayout: currentContractJsonData.storageLayout,
+      refreshTick: 0,
+    };
+
+    setDeployedContract((prev) => [...prev, newContract]);
+  };
   return (
     <div>
       <h1>SlotMatrix</h1>
@@ -464,7 +505,16 @@ function App() {
         <VscodeScrollable style={{ width: "25%", paddingRight: "12px" }}>
           <div>
             {/* wallets  */}
-            <div className="heading">Wallets</div>
+            <div style={{ display: "flex", flexDirection: "row" }}>
+              <div className="heading">Wallets</div>
+              <div
+                className="icon "
+                style={{ marginLeft: "4px", cursor: "pointer" }}
+                onClick={() => handleCopy(wallets[currentWallet].publicKey)}
+              >
+                <i className="codicon codicon-copy icon"></i>
+              </div>
+            </div>
             <VscodeSingleSelect
               value={currentWallet.toString()}
               onChange={(event) => {
@@ -581,9 +631,26 @@ function App() {
                   : undefined,
               width: "100%",
               boxSizing: "border-box",
+              marginBottom: "12px",
             }}
           >
             Deploy
+          </VscodeButton>
+
+          {/* At address  */}
+          <VscodeTextfield
+            value={atAddress}
+            placeholder="Load contract from address"
+            onChange={(event) => {
+              setAtAddress((event.target as HTMLInputElement).value);
+            }}
+            style={{ marginBottom: "12px" }}
+          />
+          <VscodeButton
+            onClick={handleAtAddress}
+            style={{ width: "100%", boxSizing: "border-box" }}
+          >
+            At Address
           </VscodeButton>
         </VscodeScrollable>
 
@@ -596,97 +663,32 @@ function App() {
             flexDirection: "column",
           }}
         >
-          <div className="heading">Logs</div>
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "row",
+              justifyContent: "space-between",
+              marginBottom: "8px",
+              alignItems: "center",
+            }}
+          >
+            <div className="heading" style={{ marginBottom: "0px" }}>
+              Logs
+            </div>
 
+            <div
+              className="icon "
+              onClick={() => {
+                setLogData([]);
+              }}
+              style={{ cursor: "pointer" }}
+            >
+              <i className="codicon codicon-clear-all"></i>
+            </div>
+          </div>
+          <VscodeDivider />
           <VscodeScrollable style={{ height: "450px" }}>
-            Lorem ipsum dolor sit amet consectetur adipisicing elit. Deserunt
-            architecto quisquam nemo, nulla beatae debitis soluta numquam, magni
-            ab in harum. Voluptate doloribus voluptatum, repellendus atque
-            molestias accusantium natus expedita. Lorem ipsum dolor sit amet
-            consectetur adipisicing elit. Deserunt architecto quisquam nemo,
-            nulla beatae debitis soluta numquam, magni ab in harum. Voluptate
-            doloribus voluptatum, repellendus atque molestias accusantium natus
-            expedita.Lorem ipsum dolor sit amet consectetur adipisicing elit.
-            Deserunt architecto quisquam nemo, nulla beatae debitis soluta
-            numquam, magni ab in harum. Voluptate doloribus voluptatum,
-            repellendus atque molestias accusantium natus expedita.Lorem ipsum
-            dolor sit amet consectetur adipisicing elit. Deserunt architecto
-            quisquam nemo, nulla beatae debitis soluta numquam, magni ab in
-            harum. Voluptate doloribus voluptatum, repellendus atque molestias
-            accusantium natus expedita.Lorem ipsum dolor sit amet consectetur
-            adipisicing elit. Deserunt architecto quisquam nemo, nulla beatae
-            debitis soluta numquam, magni ab in harum. Voluptate doloribus
-            voluptatum, repellendus atque molestias accusantium natus
-            expedita.Lorem ipsum dolor sit amet consectetur adipisicing elit.
-            Deserunt architecto quisquam nemo, nulla beatae debitis soluta
-            numquam, magni ab in harum. Voluptate doloribus voluptatum,
-            repellendus atque molestias accusantium natus expedita. Lorem ipsum
-            dolor sit amet consectetur adipisicing elit. Deserunt architecto
-            quisquam nemo, nulla beatae debitis soluta numquam, magni ab in
-            harum. Voluptate doloribus voluptatum, repellendus atque molestias
-            accusantium natus expedita. Lorem ipsum dolor sit amet consectetur
-            adipisicing elit. Deserunt architecto quisquam nemo, nulla beatae
-            debitis soluta numquam, magni ab in harum. Voluptate doloribus
-            voluptatum, repellendus atque molestias accusantium natus
-            expedita.Lorem ipsum dolor sit amet consectetur adipisicing elit.
-            Deserunt architecto quisquam nemo, nulla beatae debitis soluta
-            numquam, magni ab in harum. Voluptate doloribus voluptatum,
-            repellendus atque molestias accusantium natus expedita.Lorem ipsum
-            dolor sit amet consectetur adipisicing elit. Deserunt architecto
-            quisquam nemo, nulla beatae debitis soluta numquam, magni ab in
-            harum. Voluptate doloribus voluptatum, repellendus atque molestias
-            accusantium natus expedita.Lorem ipsum dolor sit amet consectetur
-            adipisicing elit. Deserunt architecto quisquam nemo, nulla beatae
-            debitis soluta numquam, magni ab in harum. Voluptate doloribus
-            voluptatum, repellendus atque molestias accusantium natus
-            expedita.Lorem ipsum dolor sit amet consectetur adipisicing elit.
-            Deserunt architecto quisquam nemo, nulla beatae debitis soluta
-            numquam, magni ab in harum. Voluptate doloribus voluptatum,
-            repellendus atque molestias accusantium natus expedita. Lorem ipsum
-            dolor sit amet consectetur adipisicing elit. Deserunt architecto
-            quisquam nemo, nulla beatae debitis soluta numquam, magni ab in
-            harum. Voluptate doloribus voluptatum, repellendus atque molestias
-            accusantium natus expedita. Lorem ipsum dolor sit amet consectetur
-            adipisicing elit. Deserunt architecto quisquam nemo, nulla beatae
-            debitis soluta numquam, magni ab in harum. Voluptate doloribus
-            voluptatum, repellendus atque molestias accusantium natus
-            expedita.Lorem ipsum dolor sit amet consectetur adipisicing elit.
-            Deserunt architecto quisquam nemo, nulla beatae debitis soluta
-            numquam, magni ab in harum. Voluptate doloribus voluptatum,
-            repellendus atque molestias accusantium natus expedita.Lorem ipsum
-            dolor sit amet consectetur adipisicing elit. Deserunt architecto
-            quisquam nemo, nulla beatae debitis soluta numquam, magni ab in
-            harum. Voluptate doloribus voluptatum, repellendus atque molestias
-            accusantium natus expedita.Lorem ipsum dolor sit amet consectetur
-            adipisicing elit. Deserunt architecto quisquam nemo, nulla beatae
-            debitis soluta numquam, magni ab in harum. Voluptate doloribus
-            voluptatum, repellendus atque molestias accusantium natus
-            expedita.Lorem ipsum dolor sit amet consectetur adipisicing elit.
-            Deserunt architecto quisquam nemo, nulla beatae debitis soluta
-            numquam, magni ab in harum. Voluptate doloribus voluptatum,
-            repellendus atque molestias accusantium natus expedita. Lorem ipsum
-            dolor sit amet consectetur adipisicing elit. Deserunt architecto
-            quisquam nemo, nulla beatae debitis soluta numquam, magni ab in
-            harum. Voluptate doloribus voluptatum, repellendus atque molestias
-            accusantium natus expedita. Lorem ipsum dolor sit amet consectetur
-            adipisicing elit. Deserunt architecto quisquam nemo, nulla beatae
-            debitis soluta numquam, magni ab in harum. Voluptate doloribus
-            voluptatum, repellendus atque molestias accusantium natus
-            expedita.Lorem ipsum dolor sit amet consectetur adipisicing elit.
-            Deserunt architecto quisquam nemo, nulla beatae debitis soluta
-            numquam, magni ab in harum. Voluptate doloribus voluptatum,
-            repellendus atque molestias accusantium natus expedita.Lorem ipsum
-            dolor sit amet consectetur adipisicing elit. Deserunt architecto
-            quisquam nemo, nulla beatae debitis soluta numquam, magni ab in
-            harum. Voluptate doloribus voluptatum, repellendus atque molestias
-            accusantium natus expedita.Lorem ipsum dolor sit amet consectetur
-            adipisicing elit. Deserunt architecto quisquam nemo, nulla beatae
-            debitis soluta numquam, magni ab in harum. Voluptate doloribus
-            voluptatum, repellendus atque molestias accusantium natus
-            expedita.Lorem ipsum dolor sit amet consectetur adipisicing elit.
-            Deserunt architecto quisquam nemo, nulla beatae debitis soluta
-            numquam, magni ab in harum. Voluptate doloribus voluptatum,
-            repellendus atque molestias accusantium natus expedita.
+            <Log logData={logData} />
           </VscodeScrollable>
         </div>
       </div>
@@ -710,7 +712,7 @@ function App() {
                   style={{ paddingTop: "4px", cursor: "pointer" }}
                   onClick={() => handleCloseContractTab(contractIndex)}
                 >
-                  <i className="codicon codicon-close"></i>
+                  <i className="codicon codicon-close icon"></i>
                 </div>
               </div>
             </VscodeTabHeader>
@@ -725,7 +727,7 @@ function App() {
               >
                 <div style={{ width: "25%", paddingRight: "12px" }}>
                   {/* funciton intraction  */}
-                  <div className="heading">Contract Intraction</div>
+                  <div className="heading">Contract Interaction</div>
                   <div
                     style={{
                       marginBottom: "12px",
@@ -744,7 +746,7 @@ function App() {
                       style={{ marginLeft: "4px", cursor: "pointer" }}
                       onClick={() => handleCopy(contractData.address)}
                     >
-                      <i className="codicon codicon-copy copy-icon"></i>
+                      <i className="codicon codicon-copy icon"></i>
                     </div>
                   </div>
                   <div>
@@ -754,9 +756,11 @@ function App() {
                           <div>
                             {functionData.inputs.map((input, inputIndex) => (
                               <div key={inputIndex}>
-                                <div style={{ marginBottom: "4px" }}>
-                                  {input.name} :
-                                </div>
+                                {input.name !== "" && (
+                                  <div style={{ marginBottom: "4px" }}>
+                                    {input.name} :
+                                  </div>
+                                )}
                                 <VscodeTextfield
                                   value={input.value}
                                   style={{ marginBottom: "12px" }}
@@ -822,9 +826,9 @@ function App() {
                   {/* storage layout  */}
                   <div className="heading">Storage Layout</div>
                   <StorageLayout
-                    storageLayout={currentContractJsonData.storageLayout}
-                    refreshTick={refreshTick}
-                    contractAddress={deployedContract[contractIndex].address}
+                    storageLayout={contractData.storageLayout}
+                    refreshTick={contractData.refreshTick}
+                    contractAddress={contractData.address}
                   />
                 </div>
               </div>

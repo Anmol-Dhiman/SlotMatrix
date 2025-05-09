@@ -47,6 +47,7 @@ export function activate(context: vscode.ExtensionContext) {
             // user message logs
             // structure -> {id, data{id, data}}
             case MessageId.showMessage:
+              console.log("show message")
               if (message.data.id === VSCodeMessage.error) {
                 vscode.window.showErrorMessage(message.data.data);
               } else if (message.data.id === VSCodeMessage.info) {

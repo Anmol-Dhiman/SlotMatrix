@@ -14,15 +14,7 @@ function Log({ logData }: LogProps) {
   };
 
   return (
-    <div
-      style={{
-        wordBreak: "break-all",
-        whiteSpace: "normal",
-        overflowWrap: "break-word",
-        marginTop: "12px",
-      }}
-    >
-      <p>Logs :</p>
+    <div>
       {logData.map((log, index) => (
         <div key={index} style={{ marginBottom: "12px" }}>
           <div

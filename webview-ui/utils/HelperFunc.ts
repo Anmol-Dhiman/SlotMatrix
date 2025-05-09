@@ -1,5 +1,5 @@
-import { MessageId } from "../../src/MessageId";
-import { isAddress, ethers } from "ethers";
+import { MessageId, VSCodeMessage } from "../../src/MessageId";
+import { ethers } from "ethers";
 import { Input, LogData } from "./Types";
 import { TransactionResponse, TransactionReceipt } from "ethers";
 import { vscode } from "../src/App";
@@ -12,47 +12,116 @@ export function consoleLog(message: string) {
 }
 
 export function parseConstructorArgs(inputs: Input[]): any[] {
-  return inputs.map(({ type, value }) => {
-    if (type.startsWith("uint") || type.startsWith("int")) {
-      return BigInt(value);
-    }
-
-    if (type === "address") {
-      if (!isAddress(value)) {
-        throw new Error(`Invalid address: ${value}`);
+  let result: any[] = [];
+  for (const input of inputs) {
+    const type = input.type;
+    const value = input.value;
+    if (
+      (type.startsWith("uint") || type.startsWith("int")) &&
+      !type.endsWith("[]")
+    ) {
+      try {
+        result.push(BigInt(value));
+      } catch (err) {
+        showError(
+          `parsing constructor args failed for input ${input.name} : ${err}`
+        );
       }
-      return value;
-    }
-
-    if (type === "bool") {
-      return value === "true" || value === "1";
-    }
-
-    if (type === "string") {
-      return value;
-    }
-
-    if (type.startsWith("bytes")) {
-      return value; // assume valid hex string (e.g., 0xabc123)
-    }
-
-    if (type.endsWith("[]")) {
-      // e.g. uint256[] or address[]
+    } else if (type === "address") {
+      if (ethers.isAddress(value)) {
+        result.push(value);
+      } else {
+        showError(`${input.name} is not typeof address`);
+      }
+    } else if (type === "bool") {
+      try {
+        const boolValue = BigInt(value);
+        if (boolValue === 1n || boolValue === 0n) {
+          result.push(boolValue);
+        } else {
+          showError("Invalid bool value");
+        }
+      } catch (err) {
+        showError(
+          `parsing constructor args failed for input ${input.name} : ${err}`
+        );
+      }
+    } else if (type === "string") {
+      result.push(value);
+    } else if (type.startsWith("bytes")) {
+      if (/^0x[0-9a-fA-F]*$/.test(value) && value.length % 2 === 0) {
+        result.push(value);
+      } else {
+        showError(`Invalid bytes value for ${input.name}`);
+      }
+    } else if (type.endsWith("[]")) {
+      consoleLog("Inside else of array");
       const elementType = type.replace("[]", "");
-      const parsedArray = JSON.parse(value); // should be a stringified array
-      if (!Array.isArray(parsedArray)) {
-        throw new Error(`Expected array for type ${type}, got: ${value}`);
-      }
-      return parsedArray.map(
-        (v: any) =>
-          parseConstructorArgs([
-            { name: "", type: elementType, value: String(v) },
-          ])[0]
-      );
-    }
 
-    throw new Error(`Unsupported Solidity type: ${type}`);
-  });
+      let parsedArray;
+      try {
+        parsedArray = JSON.parse(value);
+        const parsedArrayValue: any[] = [];
+
+        for (const parsedValue of parsedArray) {
+          const data = parseConstructorArgs([
+            { name: "", type: elementType, value: `${parsedValue}` },
+          ])[0];
+          consoleLog(`return data value ${data}`);
+          parsedArrayValue.push(data);
+          consoleLog("data pushed");
+        }
+
+        result.push(parsedArrayValue);
+        consoleLog(`result value is ${result}`);
+      } catch (err) {
+        showError(`Invalid array for input : ${input.name}, error : ${err}`);
+      }
+    }
+  }
+
+  return result;
+  // return inputs.map(({ type, value }) => {
+  //   if (type.startsWith("uint") || type.startsWith("int")) {
+  //     return BigInt(value);
+  //   }
+
+  //   if (type === "address") {
+  //     if (!isAddress(value)) {
+  //       throw new Error(`Invalid address: ${value}`);
+  //     }
+  //     return value;
+  //   }
+
+  //   if (type === "bool") {
+  //     return value === "true" || value === "1";
+  //   }
+
+  //   if (type === "string") {
+  //     return value;
+  //   }
+
+  //   if (type.startsWith("bytes")) {
+  //     return value; // assume valid hex string (e.g., 0xabc123)
+  //   }
+
+  //   if (type.endsWith("[]")) {
+  //     // e.g. uint256[] or address[]
+  // const elementType = type.replace("[]", "");
+  // const parsedArray = JSON.parse(value); // should be a stringified array
+  // if (!Array.isArray(parsedArray)) {
+  //   throw new Error(`Expected array for type ${type}, got: ${value}`);
+  // }
+  // return parsedArray.map(
+  //   (v: any) =>
+  //     parseConstructorArgs([
+  //       { name: "", type: elementType, value: String(v) },
+  //     ])[0]
+  // );
+  //   }
+
+  //   throw new Error(`Unsupported Solidity type: ${type}`);
+  // });
 }
 
 export function parseEthValue(
@@ -172,4 +241,14 @@ export function buildLogData(
     decodedOutput: decodedOutputFormatted,
     logs: parsedLogs, // ✅ Include parsed logs
   };
+}
+
+export function showError(message: string) {
+  vscode.postMessage({
+    id: MessageId.showMessage,
+    data: {
+      id: VSCodeMessage.error,
+      data: message,
+    },
+  });
 }
