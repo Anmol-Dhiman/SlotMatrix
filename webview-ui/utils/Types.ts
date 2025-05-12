@@ -26,7 +26,7 @@ export type DeployedContract = {
   address: string;
   functions: FuncState[];
   abi: any;
-  balance?: string;
+  balance: string;
   refreshTick: number;
   storageLayout: any;
 };
@@ -37,6 +37,7 @@ export type LogData = {
   transactionHash: string;
   blockHash: string;
   blockNumber: number;
+  contractAddress?: string;
   from: string;
   to: string;
   gas: string;
@@ -46,7 +47,8 @@ export type LogData = {
   output: string;
   decodedInput: Record<string, any>;
   decodedOutput: Record<string, any>;
-  logs?: any[];
+  eventLogs?: any[];
+  rawLogs?: any[];
 };
 
 export type WalletData = {

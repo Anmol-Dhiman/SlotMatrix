@@ -20,7 +20,12 @@ type StorageDataType = {
   label: string;
   noOfParents: number;
 };
-type TreeNode = StorageDataType & { children?: TreeNode[] };
+type TreeNode = {
+  slot: string;
+  value: string;
+  nestedStorage?: TreeNode[];
+  label: string;
+};
 
 function StorageLayout({
   storageLayout,
@@ -42,7 +47,11 @@ function StorageLayout({
     const levelMap: Record<number, TreeNode> = {};
 
     data.forEach((item) => {
-      const node: TreeNode = { ...item, children: [] };
+      const node: TreeNode = {
+        slot: item.slot,
+        value: item.value,
+        label: item.label,
+      };
       const level = item.noOfParents;
 
       if (level === 0) {
@@ -50,7 +59,10 @@ function StorageLayout({
       } else {
         const parent = levelMap[level - 1];
         if (parent) {
-          parent.children!.push(node);
+          if (!parent.nestedStorage) {
+            parent.nestedStorage = [];
+          }
+          parent.nestedStorage.push(node);
         } else {
           result.push(node); // fallback if parent is missing
         }

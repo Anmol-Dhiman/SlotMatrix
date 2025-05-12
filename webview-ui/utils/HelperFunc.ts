@@ -81,47 +81,6 @@ export function parseConstructorArgs(inputs: Input[]): any[] {
   }
 
   return result;
-  // return inputs.map(({ type, value }) => {
-  //   if (type.startsWith("uint") || type.startsWith("int")) {
-  //     return BigInt(value);
-  //   }
-
-  //   if (type === "address") {
-  //     if (!isAddress(value)) {
-  //       throw new Error(`Invalid address: ${value}`);
-  //     }
-  //     return value;
-  //   }
-
-  //   if (type === "bool") {
-  //     return value === "true" || value === "1";
-  //   }
-
-  //   if (type === "string") {
-  //     return value;
-  //   }
-
-  //   if (type.startsWith("bytes")) {
-  //     return value; // assume valid hex string (e.g., 0xabc123)
-  //   }
-
-  //   if (type.endsWith("[]")) {
-  //     // e.g. uint256[] or address[]
-  // const elementType = type.replace("[]", "");
-  // const parsedArray = JSON.parse(value); // should be a stringified array
-  // if (!Array.isArray(parsedArray)) {
-  //   throw new Error(`Expected array for type ${type}, got: ${value}`);
-  // }
-  // return parsedArray.map(
-  //   (v: any) =>
-  //     parseConstructorArgs([
-  //       { name: "", type: elementType, value: String(v) },
-  //     ])[0]
-  // );
-  //   }
-
-  //   throw new Error(`Unsupported Solidity type: ${type}`);
-  // });
 }
 
 export function parseEthValue(
@@ -239,7 +198,7 @@ export function buildLogData(
     output: rawOutput ?? "N/A",
     decodedInput: decodedInputFormatted,
     decodedOutput: decodedOutputFormatted,
-    logs: parsedLogs, // ✅ Include parsed logs
+    eventLogs: parsedLogs, // ✅ Include parsed logs
   };
 }
 
@@ -251,4 +210,13 @@ export function showError(message: string) {
       data: message,
     },
   });
+}
+
+export async function getFutureContractAddress(
+  deployerAddress: string
+): Promise<string> {
+  const provider = new ethers.JsonRpcProvider("http://localhost:8545");
+  const nonce = await provider.getTransactionCount(deployerAddress);
+
+  return ethers.getCreateAddress({ from: deployerAddress, nonce });
 }

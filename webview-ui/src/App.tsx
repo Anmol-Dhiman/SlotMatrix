@@ -52,7 +52,8 @@ export const vscode = isVSCode
       },
     };
 
-const ETHFormat = ["wei", "kwei", "mwei", "gwei", "szabo", "finney", "ether"];
+const ETHFormat = ["wei", "gwei", "finney", "ether"];
+const provider = new ethers.JsonRpcProvider("http://localhost:8545");
 
 function App() {
   /*//////////////////////////////////////////////////////////////
@@ -183,13 +184,14 @@ function App() {
     });
   }
 
+  async function getBalances(address: string): Promise<string> {
+    return ethers.formatEther(await provider.getBalance(address));
+  }
+
   async function handleDeploy() {
-    consoleLog("deploy function");
     if (pwd === undefined) {
       return;
     } else {
-      //need to check for the state of anvilTerminal
-
       if (BigInt(ethValue) < 0) {
         showError("Eth value cannot be negative");
         return;
@@ -208,14 +210,10 @@ function App() {
           return;
         }
       }
-
-      const provider = new ethers.JsonRpcProvider("http://localhost:8545");
-
       const wallet = new ethers.Wallet(
         wallets[currentWallet].privateKey,
         provider
       );
-
       const factory = new ethers.ContractFactory(
         currentContractJsonData.abi,
         currentContractJsonData.bytecode.object,
@@ -241,25 +239,27 @@ function App() {
 
       try {
         contract = await factory.deploy(...args, value);
-      } catch (err) {
-        showError(`Deployment failed due to : ${err}`);
-        consoleLog(`error: ${JSON.stringify(err, null, 2)}`);
+        let _balance = "";
+        if (constructorInputs?.stateMutability === "payable") {
+          updateWalletBalance();
+          _balance = ethers.formatEther(value?.value || 0);
+        }
+
+        const newContract: DeployedContract = {
+          name: contractFiles[currentContractFileIndex].contractName,
+          address: (await contract?.getAddress()) || "",
+          functions: buildFunctionStatesFromABI(currentContractJsonData.abi),
+          abi: currentContractJsonData.abi,
+          storageLayout: currentContractJsonData.storageLayout,
+          refreshTick: 0,
+          balance: _balance,
+        };
+        setDeployedContract((prev) => [...prev, newContract]);
+      } catch (err: any) {
+        showError(`Deployment failed due to : ${err.shortMessage}`);
+
         return;
       }
-
-      if (constructorInputs?.stateMutability === "payable")
-        updateWalletBalance();
-
-      const newContract: DeployedContract = {
-        name: contractFiles[currentContractFileIndex].contractName,
-        address: (await contract?.getAddress()) || "",
-        functions: buildFunctionStatesFromABI(currentContractJsonData.abi),
-        abi: currentContractJsonData.abi,
-        storageLayout: currentContractJsonData.storageLayout,
-        refreshTick: 0,
-      };
-
-      setDeployedContract((prev) => [...prev, newContract]);
     }
   }
 
@@ -318,8 +318,6 @@ function App() {
     functionIndex: number
   ) {
     if (functionData.name === undefined) return;
-
-    const provider = new ethers.JsonRpcProvider("http://localhost:8545");
 
     const signer = new ethers.Wallet(
       wallets[currentWallet].privateKey,
@@ -469,7 +467,7 @@ function App() {
     }
   };
 
-  const handleAtAddress = () => {
+  const handleAtAddress = async () => {
     if (atAddress === "") {
       showError("Enter the contract address");
       return;
@@ -477,6 +475,8 @@ function App() {
       showError(`${atAddress} is not a valid contract address.`);
       return;
     }
+
+    let _balance = await getBalances(atAddress);
     const newContract: DeployedContract = {
       name: contractFiles[currentContractFileIndex].contractName,
       address: atAddress,
@@ -484,13 +484,16 @@ function App() {
       abi: currentContractJsonData.abi,
       storageLayout: currentContractJsonData.storageLayout,
       refreshTick: 0,
+      balance: _balance,
     };
 
     setDeployedContract((prev) => [...prev, newContract]);
   };
+
   return (
     <div>
       <h1>SlotMatrix</h1>
+
       <p>Code. Deploy. Inspect. All in One Matrix.</p>
 
       {/* deployment and logs  */}
@@ -499,10 +502,11 @@ function App() {
           width: "100%",
           display: "flex",
           flexDirection: "row",
-          height: "500px",
         }}
       >
-        <VscodeScrollable style={{ width: "25%", paddingRight: "12px" }}>
+        <VscodeScrollable
+          style={{ width: "25%", paddingRight: "12px", height: "500px" }}
+        >
           <div>
             {/* wallets  */}
             <div style={{ display: "flex", flexDirection: "row" }}>
@@ -693,8 +697,8 @@ function App() {
         </div>
       </div>
 
-      {/* functions of contract and intraction  */}
-      <VscodeTabs>
+      {/* functions of contract and interactions  */}
+      <VscodeTabs >
         {deployedContract.map((contractData, contractIndex) => (
           <>
             <VscodeTabHeader>
@@ -726,17 +730,17 @@ function App() {
                 }}
               >
                 <div style={{ width: "25%", paddingRight: "12px" }}>
-                  {/* funciton intraction  */}
+                  {/* function interaction  */}
                   <div className="heading">Contract Interaction</div>
                   <div
                     style={{
-                      marginBottom: "12px",
+                      marginBottom: "4px",
                       display: "flex",
                       flexDirection: "row",
                     }}
                   >
                     <div>
-                      {`${contractData.address.slice(
+                      {`Address : ${contractData.address.slice(
                         0,
                         6
                       )}...${contractData.address.slice(-6)}`}
@@ -749,6 +753,11 @@ function App() {
                       <i className="codicon codicon-copy icon"></i>
                     </div>
                   </div>
+
+                  <div
+                    style={{ marginBottom: "12px" }}
+                  >{`Balance : ${contractData.balance} ETH`}</div>
+
                   <div>
                     {contractData.functions.map(
                       (functionData, functionIndex) => (

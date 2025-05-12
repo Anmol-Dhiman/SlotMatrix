@@ -28,7 +28,7 @@ function Log({ logData }: LogProps) {
             <div style={{ marginTop: "8px", fontSize: "12px", gap: "4px" }}>
               <div>status: {log.status}</div>
               <div>transaction hash: {log.transactionHash}</div>
-              <div>blockhash: {log.blockHash}</div>
+              <div>block hash: {log.blockHash}</div>
               <div>blocknumber: {log.blockNumber}</div>
               <div>from: {log.from}</div>
               <div>to: {log.to}</div>
@@ -43,7 +43,7 @@ function Log({ logData }: LogProps) {
               <div>
                 decodedOutput: {JSON.stringify(log.decodedOutput, null, 2)}
               </div>
-              <div>logs: {JSON.stringify(log.logs, null, 2)}</div>
+              <div>logs: {JSON.stringify(log.eventLogs, null, 2)}</div>
             </div>
           )}
         </div>
