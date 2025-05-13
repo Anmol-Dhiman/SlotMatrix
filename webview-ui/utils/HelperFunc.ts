@@ -55,7 +55,7 @@ export function parseConstructorArgs(inputs: Input[]): any[] {
         showError(`Invalid bytes value for ${input.name}`);
       }
     } else if (type.endsWith("[]")) {
-      consoleLog("Inside else of array");
+      
       const elementType = type.replace("[]", "");
 
       let parsedArray;
@@ -67,13 +67,13 @@ export function parseConstructorArgs(inputs: Input[]): any[] {
           const data = parseConstructorArgs([
             { name: "", type: elementType, value: `${parsedValue}` },
           ])[0];
-          consoleLog(`return data value ${data}`);
+          
           parsedArrayValue.push(data);
-          consoleLog("data pushed");
+          
         }
 
         result.push(parsedArrayValue);
-        consoleLog(`result value is ${result}`);
+        
       } catch (err) {
         showError(`Invalid array for input : ${input.name}, error : ${err}`);
       }

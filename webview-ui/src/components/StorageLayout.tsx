@@ -1,6 +1,6 @@
 import { ethers, toBigInt } from "ethers";
 import { useEffect, useState } from "react";
-import { consoleLog } from "../../utils/HelperFunc";
+ 
 import JsonView from "@uiw/react-json-view";
 import { vscodeTheme } from "@uiw/react-json-view/vscode";
 
@@ -84,7 +84,7 @@ function StorageLayout({
     label: string,
     depth = 0
   ): Promise<StorageDataType[]> {
-    consoleLog("getting string or bytes value");
+    
     const slotStorageValue = await getStorageValue(slot.toString());
     const rawBytes = ethers.getBytes(slotStorageValue);
     const isShortString = rawBytes[0] !== 0;
@@ -127,7 +127,7 @@ function StorageLayout({
     arrayType: any,
     depth = 0
   ): Promise<StorageDataType[]> {
-    consoleLog("getting static array value");
+   
     const result: StorageDataType[] = [];
 
     const type = storageLayout.types[arrayType];
@@ -159,36 +159,35 @@ function StorageLayout({
     storage: any,
     depth = 0
   ): Promise<StorageDataType[]> {
-    consoleLog("getting struct type");
+    
     const slotMap = new Map<bigint, StorageDataType>();
     const baseType = storageLayout.types[storage.type];
     const baseSlot = storage.slot;
     const label = storage.label;
 
     for (const member of baseType.members) {
-      consoleLog(`members : ${JSON.stringify(member, null, 2)}`);
+      
       const type = member.type;
-      consoleLog(`type : ${JSON.stringify(type, null, 2)}`);
+     
       const slot = toBigInt(parseInt(baseSlot) + parseInt(member.slot));
-      consoleLog(`slot : ${slot}`);
+    
       const isPackedType =
         type.startsWith("t_bool") ||
         type.startsWith("t_uint") ||
         type.startsWith("t_int") ||
         type.startsWith("t_address") ||
         type.startsWith("t_enum");
-      consoleLog(`is packed : ${isPackedType}`);
-      consoleLog("here");
+      
       let dataArray;
       if (isPackedType) {
-        consoleLog("getting uint or int or bool or address or enum value");
+        
         if (slotMap.has(slot)) {
           const existing = slotMap.get(slot)!;
           existing.label += `, ${label}`;
           slotMap.set(slot, existing);
         } else {
           const value = await getStorageValue(slot.toString());
-          consoleLog(`value is : ${value}`);
+         
           slotMap.set(slot, {
             slot: slot.toString(),
             label: label,
@@ -234,7 +233,7 @@ function StorageLayout({
     labelPrefix: string,
     depth = 0
   ): Promise<StorageDataType[]> {
-    consoleLog("getting dynamic array values");
+    
     const base = `${type.base}`.trim();
     const result: StorageDataType[] = [];
 
@@ -306,7 +305,7 @@ function StorageLayout({
 
       //normal type variables also could be packed
       if (isPackedType) {
-        consoleLog("getting uint or int or bool or address or enum value");
+       
         if (slotMap.has(slot)) {
           // Append label to existing entry
           const existing = slotMap.get(slot)!;

@@ -34,8 +34,16 @@ export function activate(context: vscode.ExtensionContext) {
         const webviewUri = panel.webview.asWebviewUri(filePath);
         return `${attr}="${webviewUri}"`;
       });
-      panel.webview.html = html;
 
+      console.log(`log : ${JSON.stringify(anvilTerminal, null, 2)}`);
+
+      vscode.window.onDidCloseTerminal((t) => {
+        if (t.name === "SlotMatrix Anvil Terminal") {
+          anvilTerminal = undefined;
+        }
+      });
+
+      panel.webview.html = html;
       panel.webview.onDidReceiveMessage(
         (message) => {
           switch (message.id) {
@@ -47,7 +55,6 @@ export function activate(context: vscode.ExtensionContext) {
             // user message logs
             // structure -> {id, data{id, data}}
             case MessageId.showMessage:
-              console.log("show message")
               if (message.data.id === VSCodeMessage.error) {
                 vscode.window.showErrorMessage(message.data.data);
               } else if (message.data.id === VSCodeMessage.info) {
@@ -72,6 +79,7 @@ export function activate(context: vscode.ExtensionContext) {
                   name: "SlotMatrix Anvil Terminal",
                 });
                 anvilTerminal.sendText("anvil");
+                console.log(`log : ${JSON.stringify(anvilTerminal, null, 2)}`);
               } else if (
                 message.data === Terminals.commandTerminal &&
                 commandTerminal === undefined
@@ -175,7 +183,6 @@ function runBuildCommand() {
     { cwd: workspaceFolders[0].uri.fsPath },
     (error, stdout, stderr) => {
       if (error) {
-        console.log("log : error", error);
         vscode.window.showErrorMessage(`Contract Build Failed : ${error}`);
         commandTerminal = vscode.window.createTerminal({
           name: "SlotMatrix Command Terminal",
@@ -188,7 +195,6 @@ function runBuildCommand() {
         return;
       }
 
-      console.log("log : output", stdout);
       vscode.window.showInformationMessage(
         `Contract build successful : ${stdout}`
       );
@@ -211,11 +217,8 @@ function runCommand(command: string) {
     { cwd: workspaceFolders[0].uri.fsPath },
     (error, stdout, stderr) => {
       if (error) {
-        console.log("log : error", error);
         return;
       }
-      console.log("log : output", stdout);
-      return;
     }
   );
 }

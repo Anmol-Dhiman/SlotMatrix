@@ -19,6 +19,10 @@ export const MessageId = {
   getSolFiles: "getSolFiles",
   getAbi: "getAbi",
   getCurrentWorkingDirectory: "getCurrentWorkingDirectory",
+
+  //interaction check
+  deployFlag: "canDeployFlag",
+  deployFlagSuccess: "deployFlagSuccess",
 };
 
 export const Terminals = {

@@ -34,15 +34,15 @@ export type DeployedContract = {
 export type LogData = {
   heading: string;
   status: string;
-  transactionHash: string;
-  blockHash: string;
-  blockNumber: number;
+  transactionHash?: string;
+  blockHash?: string;
+  blockNumber?: number;
   contractAddress?: string;
   from: string;
   to: string;
   gas: string;
-  transactionCost: string;
-  executionCost: string;
+  transactionCost?: string;
+  executionCost?: string;
   input: string;
   output: string;
   decodedInput: Record<string, any>;

@@ -24,14 +24,13 @@ import {
 import { ethers } from "ethers";
 
 import {
-  consoleLog,
   parseConstructorArgs,
   buildLogData,
   parseEthValue,
   showError,
+  consoleLog,
 } from "../utils/HelperFunc";
 import "@vscode/codicons/dist/codicon.css";
-// import Log from "./components/Log";
 import StorageLayout from "./components/StorageLayout";
 import Log from "./components/Log";
 
@@ -93,7 +92,6 @@ function App() {
     const { id, data } = event.data;
     if (id === MessageId.getSolFiles) {
       setContractFiles(data);
-      consoleLog(JSON.stringify(data, null, 2));
     } else if (id === MessageId.getCurrentWorkingDirectory) {
       setPwd(data);
     } else if (id === MessageId.getAbi) {
@@ -101,8 +99,6 @@ function App() {
       setConstructorInputs(buildInitialConstructorState(data.abi[0])); // setting constructor input state
     } else if (id === MessageId.buildCommandRunSuccess) {
       getAbiMessage();
-    } else if (id === MessageId.buildCommandFailed) {
-      // TODO build failed
     }
   });
 
@@ -256,8 +252,12 @@ function App() {
         };
         setDeployedContract((prev) => [...prev, newContract]);
       } catch (err: any) {
-        showError(`Deployment failed due to : ${err.shortMessage}`);
-
+        showError(
+          `Deployment failed due to : ${
+            err?.shortMessage || "anvil is not running"
+          }`
+        );
+        consoleLog(JSON.stringify(err, null, 2));
         return;
       }
     }
@@ -328,8 +328,6 @@ function App() {
     const contractWithSigner = contract.connect(signer);
     const iff = new ethers.Interface(abi);
 
-    consoleLog(JSON.stringify(functionData));
-
     // Prepare arguments
     const args = parseConstructorArgs(functionData.inputs);
 
@@ -341,7 +339,7 @@ function App() {
       functionData.stateMutability === "pure"
     ) {
       result = await contract[functionData.name](...args);
-      consoleLog(`value is ${result}`);
+
       setDeployedContract((prev) =>
         updateOutputValue(prev, contractIndex, functionIndex, `${result}`)
       );
@@ -378,7 +376,7 @@ function App() {
             : contract
         )
       );
-      consoleLog(`value is ${decodedOutput}`);
+
       updateWalletBalance();
       return;
     }
@@ -440,7 +438,6 @@ function App() {
             : contract
         )
       );
-      consoleLog("call successful");
     }
   }
 
@@ -462,9 +459,7 @@ function App() {
   const handleCopy = async (address: string) => {
     try {
       await navigator.clipboard.writeText(address);
-    } catch (err) {
-      consoleLog(`${err}`);
-    }
+    } catch (err) {}
   };
 
   const handleAtAddress = async () => {
@@ -627,7 +622,12 @@ function App() {
           {/* deploy button */}
 
           <VscodeButton
-            onClick={handleDeploy}
+            onClick={() => {
+              // vscode.postMessage({
+              //   id: MessageId.deployFlag,
+              // });
+              handleDeploy();
+            }}
             style={{
               backgroundColor:
                 constructorInputs?.stateMutability === "payable"
@@ -698,7 +698,7 @@ function App() {
       </div>
 
       {/* functions of contract and interactions  */}
-      <VscodeTabs >
+      <VscodeTabs>
         {deployedContract.map((contractData, contractIndex) => (
           <>
             <VscodeTabHeader>
