@@ -21,7 +21,25 @@ export function parseConstructorArgs(inputs: Input[]): any[] {
       !type.endsWith("[]")
     ) {
       try {
-        result.push(BigInt(value));
+        const bits = parseInt(type.replace(/\D/g, "")) || 256;
+        const inputValue = BigInt(value);
+
+        if (type.startsWith("uint")) {
+          const max = (1n << BigInt(bits)) - 1n;
+          if (inputValue < 0n || inputValue > max) {
+            showError(`Value ${inputValue} is out of range for ${type}`);
+          } else {
+            result.push(inputValue);
+          }
+        } else {
+          const min = -(1n << (BigInt(bits) - 1n));
+          const max = (1n << (BigInt(bits) - 1n)) - 1n;
+          if (inputValue < min || inputValue > max) {
+            showError(`Value ${inputValue} is out of range for ${type}`);
+          } else {
+            result.push(inputValue);
+          }
+        }
       } catch (err) {
         showError(
           `parsing constructor args failed for input ${input.name} : ${err}`
@@ -55,7 +73,6 @@ export function parseConstructorArgs(inputs: Input[]): any[] {
         showError(`Invalid bytes value for ${input.name}`);
       }
     } else if (type.endsWith("[]")) {
-      
       const elementType = type.replace("[]", "");
 
       let parsedArray;
@@ -67,13 +84,11 @@ export function parseConstructorArgs(inputs: Input[]): any[] {
           const data = parseConstructorArgs([
             { name: "", type: elementType, value: `${parsedValue}` },
           ])[0];
-          
+
           parsedArrayValue.push(data);
-          
         }
 
         result.push(parsedArrayValue);
-        
       } catch (err) {
         showError(`Invalid array for input : ${input.name}, error : ${err}`);
       }
@@ -132,7 +147,7 @@ export function buildLogData(
   const short = (val: string) =>
     val.length > 10 ? `${val.slice(0, 5)}...${val.slice(-5)}` : val;
 
-  const heading = `${statusIcon} [vm]from: ${short(tx.from)} to: ${
+  const heading = `${statusIcon} [anvil]from: ${short(tx.from)} to: ${
     functionFragment.name
   }(${functionFragment.inputs.map((i) => i.type).join(",")}) ${short(
     tx.to || ""
@@ -140,11 +155,9 @@ export function buildLogData(
     receipt.logs.length
   } hash: ${short(tx.hash)}`;
 
-  const baseCost = 21000n;
-  const gasUsed = BigInt(receipt.gasUsed.toString());
+  
   const gasLimit = BigInt(tx.gasLimit.toString());
-  const executionCost = gasUsed > baseCost ? gasUsed - baseCost : gasUsed;
-
+ 
   // --- New: Parse event logs ---
   const parsedLogs = receipt.logs.map((log: any, i: number) => {
     try {
@@ -192,8 +205,6 @@ export function buildLogData(
       .map((i) => i.type)
       .join(", ")}) ${tx.to ?? "Unknown"}`,
     gas: `${gasLimit} gas`,
-    transactionCost: `${gasUsed} gas`,
-    executionCost: `${executionCost} gas`,
     input: tx.data ?? "N/A",
     output: rawOutput ?? "N/A",
     decodedInput: decodedInputFormatted,
@@ -220,3 +231,6 @@ export async function getFutureContractAddress(
 
   return ethers.getCreateAddress({ from: deployerAddress, nonce });
 }
+
+export const short = (val: string) =>
+  val.length > 10 ? `${val.slice(0, 5)}...${val.slice(-5)}` : val;

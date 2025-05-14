@@ -40,15 +40,13 @@ export type LogData = {
   contractAddress?: string;
   from: string;
   to: string;
-  gas: string;
-  transactionCost?: string;
-  executionCost?: string;
+  value?: string;
+  gas?: string;
   input: string;
-  output: string;
+  output?: string;
   decodedInput: Record<string, any>;
-  decodedOutput: Record<string, any>;
-  eventLogs?: any[];
-  rawLogs?: any[];
+  decodedOutput?: Record<string, any>;
+  eventLogs?: any;
 };
 
 export type WalletData = {

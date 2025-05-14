@@ -1,3 +1,4 @@
+import { short } from "../../utils/HelperFunc";
 import { LogData } from "../../utils/Types";
 import { useState } from "react";
 
@@ -9,41 +10,133 @@ function Log({ logData }: LogProps) {
   const [openLogIndex, setOpenLogIndex] = useState<number | null>(null);
 
   const handleToggleDetails = (index: number) => {
-    // Toggle the visibility of the log details
     setOpenLogIndex((prevIndex) => (prevIndex === index ? null : index));
   };
 
+  const renderLogField = (
+    label: string,
+    displayValue: any,
+    copyValue?: string
+  ) => {
+    if (
+      displayValue === undefined ||
+      displayValue === null ||
+      (typeof displayValue === "object" &&
+        Object.keys(displayValue).length === 0)
+    ) {
+      return null;
+    }
+
+    const display =
+      typeof displayValue === "object"
+        ? JSON.stringify(displayValue, null, 2)
+        : displayValue.toString();
+
+    const toCopy =
+      copyValue !== undefined
+        ? copyValue
+        : typeof displayValue === "object"
+        ? JSON.stringify(displayValue)
+        : displayValue.toString();
+
+    const handleCopy = () => {
+      navigator.clipboard.writeText(toCopy);
+    };
+
+    return (
+      <div
+        key={label}
+        style={{
+          display: "flex",
+          flexDirection: "row",
+          alignItems: "flex-start",
+          gap: "14px",
+          marginBottom: "6px",
+        }}
+      >
+        <div
+          style={{ minWidth: "180px", fontWeight: "bold", color: "#9cdcfe" }}
+        >
+          {label}:
+        </div>
+        <div
+          style={{
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-word",
+            flex: 1,
+          }}
+        >
+          {display}
+        </div>
+
+        <div
+          className="icon "
+          style={{ marginLeft: "4px", cursor: "pointer" }}
+          onClick={handleCopy}
+        >
+          <i className="codicon codicon-copy icon"></i>
+        </div>
+      </div>
+    );
+  };
+
   return (
-    <div>
+    <div
+      style={{
+        color: "#d4d4d4",
+
+        backgroundColor: "#1e1e1e",
+        padding: "16px",
+      }}
+    >
       {logData.map((log, index) => (
-        <div key={index} style={{ marginBottom: "12px" }}>
+        <div
+          key={index}
+          style={{
+            marginBottom: "16px",
+            backgroundColor: "#252526",
+            border: "1px solid #3c3c3c",
+            borderRadius: "6px",
+            padding: "12px",
+          }}
+        >
           <div
             onClick={() => handleToggleDetails(index)}
-            style={{ cursor: "pointer" }}
+            style={{
+              cursor: "pointer",
+              fontWeight: "bold",
+
+              marginBottom: "8px",
+            }}
           >
             {log.heading}
           </div>
-          {/* Display log details only if the log is clicked */}
+
           {openLogIndex === index && (
-            <div style={{ marginTop: "8px", fontSize: "12px", gap: "4px" }}>
-              <div>status: {log.status}</div>
-              <div>transaction hash: {log.transactionHash}</div>
-              <div>block hash: {log.blockHash}</div>
-              <div>blocknumber: {log.blockNumber}</div>
-              <div>from: {log.from}</div>
-              <div>to: {log.to}</div>
-              <div>gas: {log.gas}</div>
-              <div>transaction ost: {log.transactionCost}</div>
-              <div>execution Cost: {log.executionCost}</div>
-              <div>input: {log.input}</div>
-              <div>
-                decodedInput: {JSON.stringify(log.decodedInput, null, 2)}
-              </div>
-              <div>output: {log.output}</div>
-              <div>
-                decodedOutput: {JSON.stringify(log.decodedOutput, null, 2)}
-              </div>
-              <div>logs: {JSON.stringify(log.eventLogs, null, 2)}</div>
+            <div
+              style={{
+                fontSize: "13px",
+                display: "grid",
+                gap: "6px",
+                backgroundColor: "#1e1e1e",
+                padding: "8px",
+                borderRadius: "4px",
+              }}
+            >
+              {renderLogField("status", log.status)}
+              {renderLogField("transactionHash", log.transactionHash)}
+              {renderLogField("blockHash", log.blockHash)}
+              {renderLogField("blockNumber", log.blockNumber)}
+              {renderLogField("contractAddress", log.contractAddress)}
+              {renderLogField("from", log.from)}
+              {renderLogField("to", log.to)}
+              {renderLogField("value", log.value)}
+              {renderLogField("gas", log.gas)}
+              {renderLogField("input", short(log.input), log.input)}
+              {renderLogField("output", log.output)}
+              {renderLogField("decodedInput", log.decodedInput)}
+              {renderLogField("decodedOutput", log.decodedOutput)}
+              {renderLogField("eventLogs", log.eventLogs)}
             </div>
           )}
         </div>

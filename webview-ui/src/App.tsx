@@ -29,6 +29,7 @@ import {
   parseEthValue,
   showError,
   consoleLog,
+  short,
 } from "../utils/HelperFunc";
 import "@vscode/codicons/dist/codicon.css";
 import StorageLayout from "./components/StorageLayout";
@@ -221,7 +222,9 @@ function App() {
           ? {
               value: parseEthValue(ethValue, ethFormat),
             }
-          : {};
+          : {
+              value: 0,
+            };
 
       const args = parseConstructorArgs(constructorInputs?.inputs || []);
 
@@ -232,9 +235,14 @@ function App() {
       }
 
       let contract;
+      let response;
+      const currentContractData = contractFiles[currentContractFileIndex];
 
       try {
         contract = await factory.deploy(...args, value);
+        response = contract.deploymentTransaction();
+        const receipt = await response?.wait(0);
+
         let _balance = "";
         if (constructorInputs?.stateMutability === "payable") {
           updateWalletBalance();
@@ -251,18 +259,134 @@ function App() {
           balance: _balance,
         };
         setDeployedContract((prev) => [...prev, newContract]);
-      } catch (err: any) {
-        showError(
-          `Deployment failed due to : ${
-            err?.shortMessage || "anvil is not running"
-          }`
+
+        buildDeploymentLog(
+          true,
+          wallets[currentWallet].publicKey,
+          `${currentContractData.basename}:${currentContractData.contractName}.(constructor)`,
+          value.value.toString(),
+          response?.data || "",
+          args,
+          currentContractJsonData.abi,
+          receipt
         );
-        consoleLog(JSON.stringify(err, null, 2));
+      } catch (err: any) {
+        consoleLog(`deployment error : ${JSON.stringify(err, null, 2)}`);
+        buildDeploymentLog(
+          false,
+          wallets[currentWallet].publicKey,
+          `${currentContractData.basename}:${currentContractData.contractName}.(constructor)`,
+          value.value.toString(),
+          err.transaction.data,
+          args,
+          currentContractJsonData.abi
+        );
         return;
       }
     }
   }
 
+  async function buildDeploymentLog(
+    isDeployedSuccess: boolean,
+    from: string,
+    to: string,
+    value: string,
+    input: string,
+    args: any[],
+    abi: any,
+
+    receipt?: any
+  ) {
+    try {
+      consoleLog("inside build log");
+
+      const constructorAbi = abi.find((i: any) => i.type === "constructor");
+      let decodedInputFormatted = {};
+      if (constructorAbi) {
+        decodedInputFormatted = Object.fromEntries(
+          args.map((v: any, i: number) => [
+            `${constructorAbi.inputs[i].type} ${constructorAbi.inputs[i].name}`,
+            `${v}`,
+          ])
+        );
+      }
+
+      let log: LogData;
+
+      if (isDeployedSuccess) {
+        const heading = `✅ [anvil] from : ${short(
+          from
+        )} to : ${to} value : ${value} wei data : ${short(input)}`;
+        log = {
+          heading: heading,
+          status: "0x1 Transaction mined and execution succeed",
+          from: from,
+          to: to,
+          value: `${ethers.formatEther(value)} ETH`,
+          input: input,
+          decodedInput: decodedInputFormatted,
+          blockHash: receipt.blockHash,
+          blockNumber: receipt.blockNumber,
+          transactionHash: receipt.hash,
+          gas: receipt.gasUsed,
+          contractAddress: receipt.contractAddress,
+          eventLogs:
+            receipt.logs.length !== 0
+              ? decodeEventLogs(receipt.logs, abi)
+              : undefined,
+        };
+      } else {
+        const heading = `❌ [anvil] from : ${short(
+          from
+        )} to : ${to} value : ${value} wei data : ${short(input)}`;
+
+        log = {
+          heading: heading,
+          status: "0x0 Transaction failed",
+          from: from,
+          to: to,
+          value: `${ethers.formatEther(value)} ETH`,
+          input: input,
+          decodedInput: decodedInputFormatted,
+        };
+      }
+      setLogData((prev) => [...prev, log]);
+    } catch (err) {
+      consoleLog(`error : ${err}`);
+    }
+  }
+
+  function decodeEventLogs(
+    rawLogs: any[],
+    abi: any
+  ): Record<string, Record<string, string>> {
+    const iface = new ethers.Interface(abi);
+    const decodedLogs: Record<string, Record<string, string>> = {};
+
+    for (const log of rawLogs) {
+      try {
+        const parsed = iface.parseLog({
+          topics: log.topics,
+          data: log.data,
+        });
+        if (!parsed) continue;
+
+        const logName = parsed.name;
+        const logData: Record<string, string> = {};
+
+        parsed.fragment.inputs.forEach((input, idx) => {
+          const value = parsed.args[idx];
+          logData[`${input.type} ${input.name}`] = value.toString();
+        });
+
+        decodedLogs[logName] = logData;
+      } catch (err) {
+        continue; // skip unrecognized logs
+      }
+    }
+
+    return decodedLogs;
+  }
   function updateInputValue(
     prev: DeployedContract[],
     contractIndex: number,
