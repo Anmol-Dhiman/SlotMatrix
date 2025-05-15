@@ -1,7 +1,7 @@
 import { MessageId, VSCodeMessage } from "../../src/MessageId";
 import { ethers } from "ethers";
 import { Input, LogData } from "./Types";
-import { TransactionResponse, TransactionReceipt } from "ethers";
+
 import { vscode } from "../src/App";
 
 export function consoleLog(message: string) {
@@ -110,106 +110,104 @@ export function parseEthValue(
   }
 }
 
-export function buildLogData(
-  tx: TransactionResponse,
-  receipt: TransactionReceipt,
-  iface: ethers.Interface,
+export function buildFunctionCallLogs(
+  isCallSuccess: Boolean,
+  from: string,
+  to: string, // contract + function name
   functionName: string,
-  rawOutput: string | null = null,
-  decodedOutput: any | null = null
+  inputBytes: string,
+  args: any[],
+  abi: any,
+  value: string, //eth value in wei,
+  contractAddress: string,
+  outputBytes?: string,
+  receipt?: any,
+  error?: any
 ): LogData | undefined {
-  const decodedInput = iface.decodeFunctionData(functionName, tx.data);
-  const functionFragment = iface.getFunction(functionName);
+  try {
+    consoleLog("inside function log building");
 
-  if (functionFragment === null || receipt.status === null) {
-    return undefined;
-  }
+    const iface = new ethers.Interface(abi);
 
-  const decodedInputFormatted = decodedInput
-    ? Object.fromEntries(
-        decodedInput.map((v: any, i: number) => [
-          `${functionFragment.inputs[i].type} ${functionFragment.inputs[i].name}`,
-          v?.toString() ?? "N/A",
-        ])
-      )
-    : {};
+    const functionFragment = iface.getFunction(functionName);
+    if (functionFragment === null) return undefined;
+    const decodedInputFormatted = Object.fromEntries(
+      args.map((v: any, i: number) => [
+        `${functionFragment.inputs[i].type} ${functionFragment.inputs[i].name}`,
+        `${v}`,
+      ])
+    );
 
-  const decodedOutputFormatted = decodedOutput
-    ? Object.fromEntries(
-        decodedOutput.map((v: any, i: number) => [
-          `${functionFragment.outputs[i].type} ${functionFragment.outputs[i].name}`,
-          v?.toString() ?? "N/A",
-        ])
-      )
-    : {};
-
-  const statusIcon = receipt.status === 1 ? "✅" : "❌";
-  const short = (val: string) =>
-    val.length > 10 ? `${val.slice(0, 5)}...${val.slice(-5)}` : val;
-
-  const heading = `${statusIcon} [anvil]from: ${short(tx.from)} to: ${
-    functionFragment.name
-  }(${functionFragment.inputs.map((i) => i.type).join(",")}) ${short(
-    tx.to || ""
-  )} value: ${tx.value?.toString() || "0"} wei data: ${short(tx.data)} logs: ${
-    receipt.logs.length
-  } hash: ${short(tx.hash)}`;
-
-  const gasLimit = BigInt(tx.gasLimit.toString());
-
-  // --- New: Parse event logs ---
-  const parsedLogs = receipt.logs.map((log: any, i: number) => {
-    try {
-      const parsed = iface.parseLog(log);
-      if (parsed === null) {
-        return {
-          topic: log.topics[i],
-          event: "UnknownEvent",
-          args: {},
-        };
-      }
-
-      const argsFormatted = Object.fromEntries(
-        parsed.fragment.inputs.map((input, i) => [
-          `${input.name}`,
-          parsed.args[i]?.toString() ?? "N/A",
-        ])
+    let log: LogData;
+    if (isCallSuccess && outputBytes !== undefined) {
+      const decodedOutput = iface.decodeFunctionResult(
+        functionName,
+        outputBytes
       );
-      return {
-        topic: log.topics[i],
-        event: parsed.name,
-        args: argsFormatted,
+      const decodedOutputFormatted = decodedOutput
+        ? Object.fromEntries(
+            decodedOutput.map((v: any, i: number) => [
+              `${functionFragment.outputs[i].type} ${functionFragment.outputs[i].name}`,
+              `${v}`,
+            ])
+          )
+        : {};
+
+      const heading = `✅ [anvil] from : ${short(
+        receipt.from
+      )} to : ${to} value : ${value} wei data : ${short(
+        inputBytes
+      )} hash : ${short(receipt.hash)} `;
+
+      log = {
+        heading: heading,
+        status: "0x1 Transaction mined and execution succeed",
+        from: receipt.from,
+        to: `${to}`,
+        value: `${ethers.formatEther(value)} ETH`,
+        blockHash: receipt.blockHash,
+        blockNumber: receipt.blockNumber,
+        transactionHash: receipt.hash,
+        gas: receipt.gasUsed,
+        contractAddress: contractAddress,
+        input: inputBytes,
+        decodedInput: decodedInputFormatted,
+        output: outputBytes === "0x" ? undefined : outputBytes,
+        decodedOutput:
+          Object.keys(decodedOutputFormatted).length === 0
+            ? undefined
+            : decodedOutputFormatted,
+        eventLogs:
+          receipt.logs.length !== 0
+            ? decodeEventLogs(receipt.logs, abi)
+            : undefined,
       };
-    } catch (err) {
-      return {
-        topic: log.topics[i],
-        event: "UnknownEvent",
-        args: {},
+    } else {
+      const heading = `❌ [anvil] from : ${short(
+        from
+      )} to : ${to} value : ${value} wei data : ${short(inputBytes)}`;
+
+      log = {
+        heading: heading,
+        status: "0x0 Transaction failed.",
+        contractAddress: contractAddress,
+        from: from,
+        to: to,
+        value: `${ethers.formatEther(value)} ETH`,
+        input: inputBytes,
+        decodedInput: decodedInputFormatted,
+        output: outputBytes,
+        reason: error.shortMessage || undefined,
+        error:
+          error.reason === null
+            ? decodeCustomError(error.data, abi)
+            : undefined,
       };
     }
-  });
-
-  return {
-    heading,
-    status: `0x${receipt.status.toString(16)} ${
-      receipt.status === 1
-        ? "Transaction mined and execution succeed"
-        : "Transaction failed"
-    }`,
-    transactionHash: tx.hash,
-    blockHash: receipt.blockHash ?? "N/A",
-    blockNumber: receipt.blockNumber ?? -1,
-    from: tx.from ?? "Unknown",
-    to: `${functionFragment.name}(${functionFragment.inputs
-      .map((i) => i.type)
-      .join(", ")}) ${tx.to ?? "Unknown"}`,
-    gas: `${gasLimit} gas`,
-    input: tx.data ?? "N/A",
-    output: rawOutput ?? "N/A",
-    decodedInput: decodedInputFormatted,
-    decodedOutput: decodedOutputFormatted,
-    eventLogs: parsedLogs, // ✅ Include parsed logs
-  };
+    return log;
+  } catch (err) {
+    consoleLog(`error in logs : ${JSON.stringify(err, null, 2)}`);
+  }
 }
 
 export function showError(message: string) {
