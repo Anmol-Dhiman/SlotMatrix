@@ -7,7 +7,7 @@ export type Input = {
 export type Output = Input;
 
 export type FuncState = {
-  name?: string;
+  name: string;
   stateMutability: string;
   inputs: Input[];
   outputs?: string;
@@ -47,6 +47,8 @@ export type LogData = {
   decodedInput: Record<string, any>;
   decodedOutput?: Record<string, any>;
   eventLogs?: any;
+  reason?: string;
+  error?: any;
 };
 
 export type WalletData = {

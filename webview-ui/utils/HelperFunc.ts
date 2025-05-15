@@ -11,7 +11,7 @@ export function consoleLog(message: string) {
   });
 }
 
-export function parseConstructorArgs(inputs: Input[]): any[] {
+export function parseArgs(inputs: Input[]): any[] {
   let result: any[] = [];
   for (const input of inputs) {
     const type = input.type;
@@ -81,7 +81,7 @@ export function parseConstructorArgs(inputs: Input[]): any[] {
         const parsedArrayValue: any[] = [];
 
         for (const parsedValue of parsedArray) {
-          const data = parseConstructorArgs([
+          const data = parseArgs([
             { name: "", type: elementType, value: `${parsedValue}` },
           ])[0];
 
@@ -155,9 +155,8 @@ export function buildLogData(
     receipt.logs.length
   } hash: ${short(tx.hash)}`;
 
-  
   const gasLimit = BigInt(tx.gasLimit.toString());
- 
+
   // --- New: Parse event logs ---
   const parsedLogs = receipt.logs.map((log: any, i: number) => {
     try {
@@ -234,3 +233,130 @@ export async function getFutureContractAddress(
 
 export const short = (val: string) =>
   val.length > 10 ? `${val.slice(0, 5)}...${val.slice(-5)}` : val;
+
+export async function buildDeploymentLog(
+  isDeployedSuccess: boolean,
+  from: string,
+  to: string,
+  value: string,
+  input: string,
+  args: any[],
+  abi: any,
+  receipt?: any
+): Promise<LogData> {
+  consoleLog("inside build log");
+  const constructorAbi = abi.find((i: any) => i.type === "constructor");
+  let decodedInputFormatted = {};
+  if (constructorAbi) {
+    decodedInputFormatted = Object.fromEntries(
+      args.map((v: any, i: number) => [
+        `${constructorAbi.inputs[i].type} ${constructorAbi.inputs[i].name}`,
+        `${v}`,
+      ])
+    );
+  }
+
+  let log: LogData;
+
+  if (isDeployedSuccess) {
+    const heading = `✅ [anvil] from : ${short(
+      from
+    )} to : ${to} value : ${value} wei data : ${short(input)} hash : ${short(
+      receipt.hash
+    )} `;
+    log = {
+      heading: heading,
+      status: "0x1 Transaction mined and execution succeed",
+      from: from,
+      to: to,
+      value: `${ethers.formatEther(value)} ETH`,
+      input: input,
+      decodedInput: decodedInputFormatted,
+      blockHash: receipt.blockHash,
+      blockNumber: receipt.blockNumber,
+      transactionHash: receipt.hash,
+      gas: receipt.gasUsed,
+      contractAddress: receipt.contractAddress,
+      eventLogs:
+        receipt.logs.length !== 0
+          ? decodeEventLogs(receipt.logs, abi)
+          : undefined,
+    };
+  } else {
+    const heading = `❌ [anvil] from : ${short(
+      from
+    )} to : ${to} value : ${value} wei data : ${short(input)}`;
+
+    log = {
+      heading: heading,
+      status: "0x0 Transaction failed",
+      from: from,
+      to: to,
+      value: `${ethers.formatEther(value)} ETH`,
+      input: input,
+      decodedInput: decodedInputFormatted,
+    };
+  }
+  return log;
+}
+
+export function decodeEventLogs(
+  rawLogs: any[],
+  abi: any
+): Record<string, Record<string, string>> {
+  const iface = new ethers.Interface(abi);
+  const decodedLogs: Record<string, Record<string, string>> = {};
+
+  for (const log of rawLogs) {
+    try {
+      const parsed = iface.parseLog({
+        topics: log.topics,
+        data: log.data,
+      });
+      if (!parsed) continue;
+
+      const logName = parsed.name;
+      const logData: Record<string, string> = {};
+
+      parsed.fragment.inputs.forEach((input, idx) => {
+        const value = parsed.args[idx];
+        logData[`${input.type} ${input.name}`] = value.toString();
+      });
+
+      decodedLogs[logName] = logData;
+    } catch (err) {
+      continue; // skip unrecognized logs
+    }
+  }
+
+  return decodedLogs;
+}
+
+export function decodeCustomError(
+  errorData: string,
+  abi: any
+): Record<string, Record<string, string>> | undefined {
+  consoleLog("inside custom error");
+  const iface = new ethers.Interface(abi);
+
+  try {
+    const parsed = iface.parseError(errorData);
+    if (!parsed) return;
+    consoleLog("hello world");
+    const errorName = parsed.name;
+    consoleLog(errorName);
+    const errorArgs: Record<string, string> = {};
+
+    parsed.fragment.inputs.forEach((input, idx) => {
+      const value = parsed.args[idx];
+      errorArgs[`${input.type} ${input.name}`] = value.toString();
+    });
+
+    return {
+      [errorName]: errorArgs,
+    };
+  } catch (err) {
+    // Not a custom error or ABI mismatch
+    return undefined;
+  }
+}

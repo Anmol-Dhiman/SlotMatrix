@@ -132,11 +132,17 @@ function Log({ logData }: LogProps) {
               {renderLogField("to", log.to)}
               {renderLogField("value", log.value)}
               {renderLogField("gas", log.gas)}
-              {renderLogField("input", short(log.input), log.input)}
+              {renderLogField(
+                "input",
+                log.input.length > 15 ? short(log.input) : log.input,
+                log.input
+              )}
               {renderLogField("output", log.output)}
               {renderLogField("decodedInput", log.decodedInput)}
               {renderLogField("decodedOutput", log.decodedOutput)}
               {renderLogField("eventLogs", log.eventLogs)}
+              {renderLogField("reason", log.reason)}
+              {renderLogField("error", log.error)}
             </div>
           )}
         </div>

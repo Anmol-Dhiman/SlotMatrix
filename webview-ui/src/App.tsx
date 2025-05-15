@@ -13,7 +13,7 @@ import {
 import "./App.css";
 import { AnvilKeys } from "../utils/AnvilKeys";
 import { useEffect, useState } from "react";
-import { MessageId, Terminals, VSCodeMessage } from "../../src/MessageId";
+import { MessageId, Terminals } from "../../src/MessageId";
 import {
   ABIEntry,
   FuncState,
@@ -24,12 +24,15 @@ import {
 import { ethers } from "ethers";
 
 import {
-  parseConstructorArgs,
-  buildLogData,
+  parseArgs,
+  // buildLogData,
   parseEthValue,
   showError,
   consoleLog,
+  buildDeploymentLog,
+  decodeEventLogs,
   short,
+  decodeCustomError,
 } from "../utils/HelperFunc";
 import "@vscode/codicons/dist/codicon.css";
 import StorageLayout from "./components/StorageLayout";
@@ -106,6 +109,7 @@ function App() {
   function buildInitialConstructorState(abi: ABIEntry): FuncState | undefined {
     if (abi.type !== "constructor") return undefined;
     return {
+      name: "constructor",
       stateMutability: abi.stateMutability,
       inputs: (abi.inputs || []).map((input) => ({
         name: input.name,
@@ -116,7 +120,7 @@ function App() {
   }
 
   function buildFunctionStatesFromABI(abi: any[]): FuncState[] {
-    return abi
+    let result = abi
       .filter((item) => item.type === "function")
       .map(
         (func): FuncState => ({
@@ -129,6 +133,7 @@ function App() {
           })),
         })
       );
+    return result;
   }
 
   useEffect(() => {
@@ -226,7 +231,7 @@ function App() {
               value: 0,
             };
 
-      const args = parseConstructorArgs(constructorInputs?.inputs || []);
+      const args = parseArgs(constructorInputs?.inputs || []);
 
       // failed to parse the constructor args
       if (args.length !== (constructorInputs?.inputs?.length || 0)) {
@@ -260,7 +265,7 @@ function App() {
         };
         setDeployedContract((prev) => [...prev, newContract]);
 
-        buildDeploymentLog(
+        const log = await buildDeploymentLog(
           true,
           wallets[currentWallet].publicKey,
           `${currentContractData.basename}:${currentContractData.contractName}.(constructor)`,
@@ -270,9 +275,10 @@ function App() {
           currentContractJsonData.abi,
           receipt
         );
+        setLogData((prev) => [...prev, log]);
       } catch (err: any) {
         consoleLog(`deployment error : ${JSON.stringify(err, null, 2)}`);
-        buildDeploymentLog(
+        const log = await buildDeploymentLog(
           false,
           wallets[currentWallet].publicKey,
           `${currentContractData.basename}:${currentContractData.contractName}.(constructor)`,
@@ -281,55 +287,337 @@ function App() {
           args,
           currentContractJsonData.abi
         );
+        setLogData((prev) => [...prev, log]);
         return;
       }
     }
   }
 
-  async function buildDeploymentLog(
-    isDeployedSuccess: boolean,
+  async function handleFunctionCall(
+    functionData: FuncState,
+    contractAddress: string,
+    abi: any,
+    contractIndex: number,
+    functionIndex: number
+  ) {
+    if (BigInt(ethValue) < 0) {
+      showError("Eth value cannot be negative");
+      return;
+    }
+
+    for (const input of functionData.inputs) {
+      if (input.value === "") {
+        showError(`Please fill the ${input.name} input`);
+        return;
+      }
+    }
+    const signer = new ethers.Wallet(
+      wallets[currentWallet].privateKey,
+      provider
+    );
+
+    const contract = new ethers.Contract(contractAddress, abi, provider);
+    const contractWithSigner = contract.connect(signer);
+    const iff = new ethers.Interface(abi); //interface
+
+    // Prepare arguments
+    const args = parseArgs(functionData.inputs);
+    if (args.length !== functionData.inputs.length) {
+      // error while parsing the args
+      return;
+    }
+
+    // If function is view or pure => call normally
+    if (
+      functionData.stateMutability === "view" ||
+      functionData.stateMutability === "pure"
+    ) {
+      const result = await contract[functionData.name](...args);
+
+      setDeployedContract((prev) =>
+        updateOutputValue(prev, contractIndex, functionIndex, `${result}`)
+      );
+      return;
+    } else {
+      if (
+        functionData.stateMutability === "nonpayable" &&
+        BigInt(ethValue) > 0
+      ) {
+        showError(`${functionData.name} is not payable function`);
+        return;
+      }
+      const currentContractData = contractFiles[currentContractFileIndex];
+      try {
+        const value =
+          functionData.stateMutability === "payable"
+            ? {
+                value: parseEthValue(ethValue, ethFormat),
+              }
+            : {
+                value: 0,
+              };
+
+        consoleLog(`value is : ${value.value}`);
+        const rawOutput = await provider.call({
+          to: contractAddress,
+          data: iff.encodeFunctionData(functionData.name, [...args]),
+          value: value.value,
+          from: wallets[currentWallet].publicKey,
+        });
+
+        const response = await (contractWithSigner as any)[functionData.name](
+          ...args,
+          value
+        );
+
+        consoleLog("hello world");
+        const receipt = await response.wait(0);
+
+        updateWalletBalance();
+        consoleLog(
+          `receipt of function call ${JSON.stringify(receipt, null, 2)}`
+        );
+
+        const log = buildFunctionCallLogs(
+          true,
+          wallets[currentWallet].publicKey,
+          `${currentContractData.basename}:${currentContractData.contractName}.${functionData.name}()`,
+          functionData.name,
+          response.data,
+          args,
+          abi,
+          parseEthValue(ethValue, ethFormat).toString(),
+          contractAddress,
+          rawOutput,
+          receipt
+        );
+        if (log !== undefined) {
+          setLogData((prev) => [...prev, log]);
+          if (log.decodedOutput !== undefined)
+            setDeployedContract((prev) =>
+              updateOutputValue(
+                prev,
+                contractIndex,
+                functionIndex,
+                `${JSON.stringify(log.decodedOutput)}`
+              )
+            );
+        }
+        // setting refresh tick
+        setDeployedContract((prevContracts) =>
+          prevContracts.map((contract) =>
+            contract.address === contractAddress
+              ? { ...contract, refreshTick: contract.refreshTick + 1 }
+              : contract
+          )
+        );
+      } catch (err: any) {
+        consoleLog(`error : ${JSON.stringify(err, null, 2)}`);
+        consoleLog(err.info.error.message);
+        const log = buildFunctionCallLogs(
+          false,
+          wallets[currentWallet].publicKey,
+          `${currentContractData.basename}:${currentContractData.contractName}.${functionData.name}()`,
+          functionData.name,
+          err.transaction.data,
+          args,
+          abi,
+          parseEthValue(ethValue, ethFormat).toString(),
+          contractAddress,
+          err.data,
+          undefined,
+          err
+        );
+        if (log !== undefined) setLogData((prev) => [...prev, log]);
+      }
+    }
+
+    // If function is payable
+    // else if (functionData.stateMutability === "payable") {
+    //   const rawOutput = await provider.call({
+    //     to: contractAddress,
+    //     data: iff.encodeFunctionData(functionData.name, [...args]),
+    //     value: parseEthValue(ethValue, ethFormat),
+    //   });
+    //   const decodedOutput = iff.decodeFunctionResult(
+    //     functionData.name,
+    //     rawOutput
+    //   );
+    //   if (decodedOutput.length !== 0) {
+    //     setDeployedContract((prev) =>
+    //       updateOutputValue(
+    //         prev,
+    //         contractIndex,
+    //         functionIndex,
+    //         `${decodedOutput.toString()}`
+    //       )
+    //     );
+    //   }
+    //   result = await (contractWithSigner as any)[functionData.name](...args, {
+    //     value: parseEthValue(ethValue, ethFormat),
+    //   });
+    //   setDeployedContract((prevContracts) =>
+    //     prevContracts.map((contract) =>
+    //       contract.address === contractAddress
+    //         ? { ...contract, refreshTick: contract.refreshTick + 1 }
+    //         : contract
+    //     )
+    //   );
+
+    //   updateWalletBalance();
+    //   return;
+    // }
+    // // If function is nonpayable (regular transaction)
+    // else if (functionData.stateMutability === "nonpayable") {
+    //   const currentContractData = contractFiles[currentContractFileIndex];
+
+    //   try {
+    //     if (ethValue !== "") {
+    //       showError(`${functionData.name} is not payable function`);
+    //       return;
+    //     }
+
+    //     // simulation
+    //     const rawOutput = await provider.call({
+    //       to: contractAddress,
+    //       data: iff.encodeFunctionData(functionData.name, [...args]),
+    //     });
+    //     consoleLog(`raw output ${rawOutput}`);
+    //     const decodedOutput = iff.decodeFunctionResult(
+    //       functionData.name,
+    //       rawOutput
+    //     );
+
+    //     if (decodedOutput.length !== 0) {
+    //       setDeployedContract((prev) =>
+    //         updateOutputValue(
+    //           prev,
+    //           contractIndex,
+    //           functionIndex,
+    //           `${decodedOutput.toString()}`
+    //         )
+    //       );
+    //     }
+
+    //     // actual call
+    //     //need to add try catch here
+    //     const response = await (contractWithSigner as any)[functionData.name](
+    //       ...args
+    //     );
+
+    //     const receipt = await response.wait(0);
+    //     consoleLog(
+    //       `receipt of function call ${JSON.stringify(receipt, null, 2)}`
+    //     );
+
+    //     const log = buildFunctionCallLogs(
+    //       true,
+    //       wallets[currentWallet].publicKey,
+    //       `${currentContractData.basename}:${currentContractData.contractName}.${functionData.name}()`,
+    //       functionData.name,
+    //       response.data,
+    //       args,
+    //       abi,
+    //       "0",
+    //       contractAddress,
+    //       rawOutput,
+    //       receipt
+    //     );
+    //     if (log !== undefined) setLogData((prev) => [...prev, log]);
+    //     // setting refresh tick
+    //     setDeployedContract((prevContracts) =>
+    //       prevContracts.map((contract) =>
+    //         contract.address === contractAddress
+    //           ? { ...contract, refreshTick: contract.refreshTick + 1 }
+    //           : contract
+    //       )
+    //     );
+    //   } catch (err: any) {
+    //     consoleLog(`error : ${JSON.stringify(err, null, 2)}`);
+    //     consoleLog(err.info.error.message);
+    //     const log = buildFunctionCallLogs(
+    //       false,
+    //       wallets[currentWallet].publicKey,
+    //       `${currentContractData.basename}:${currentContractData.contractName}.${functionData.name}()`,
+    //       functionData.name,
+    //       err.transaction.data,
+    //       args,
+    //       abi,
+    //       "0",
+    //       contractAddress,
+    //       err.data,
+    //       undefined,
+    //       err
+    //     );
+    //     if (log !== undefined) setLogData((prev) => [...prev, log]);
+    //   }
+    // }
+  }
+
+  function buildFunctionCallLogs(
+    isCallSuccess: Boolean,
     from: string,
-    to: string,
-    value: string,
-    input: string,
+    to: string, // contract + function name
+    functionName: string,
+    inputBytes: string,
     args: any[],
     abi: any,
-
-    receipt?: any
-  ) {
+    value: string, //eth value in wei,
+    contractAddress: string,
+    outputBytes?: string,
+    receipt?: any,
+    error?: any
+  ): LogData | undefined {
     try {
-      consoleLog("inside build log");
+      consoleLog("inside function log building");
 
-      const constructorAbi = abi.find((i: any) => i.type === "constructor");
-      let decodedInputFormatted = {};
-      if (constructorAbi) {
-        decodedInputFormatted = Object.fromEntries(
-          args.map((v: any, i: number) => [
-            `${constructorAbi.inputs[i].type} ${constructorAbi.inputs[i].name}`,
-            `${v}`,
-          ])
-        );
-      }
+      const iface = new ethers.Interface(abi);
+
+      const functionFragment = iface.getFunction(functionName);
+      if (functionFragment === null) return undefined;
+      const decodedInputFormatted = Object.fromEntries(
+        args.map((v: any, i: number) => [
+          `${functionFragment.inputs[i].type} ${functionFragment.inputs[i].name}`,
+          `${v}`,
+        ])
+      );
 
       let log: LogData;
+      if (isCallSuccess && outputBytes !== undefined) {
+        const decodedOutput = iface.decodeFunctionResult(
+          functionName,
+          outputBytes
+        );
+        const decodedOutputFormatted = decodedOutput
+          ? Object.fromEntries(
+              decodedOutput.map((v: any, i: number) => [
+                `${functionFragment.outputs[i].type} ${functionFragment.outputs[i].name}`,
+                v?.toString() ?? "N/A",
+              ])
+            )
+          : {};
 
-      if (isDeployedSuccess) {
         const heading = `✅ [anvil] from : ${short(
-          from
-        )} to : ${to} value : ${value} wei data : ${short(input)}`;
+          receipt.from
+        )} to : ${to} value : ${value} wei data : ${short(
+          inputBytes
+        )} hash : ${short(receipt.hash)} `;
+
         log = {
           heading: heading,
           status: "0x1 Transaction mined and execution succeed",
-          from: from,
-          to: to,
+          from: receipt.from,
+          to: `${to}`,
           value: `${ethers.formatEther(value)} ETH`,
-          input: input,
-          decodedInput: decodedInputFormatted,
           blockHash: receipt.blockHash,
           blockNumber: receipt.blockNumber,
           transactionHash: receipt.hash,
           gas: receipt.gasUsed,
-          contractAddress: receipt.contractAddress,
+          contractAddress: contractAddress,
+          input: inputBytes,
+          decodedInput: decodedInputFormatted,
+          output: outputBytes === "0x" ? undefined : outputBytes,
+          decodedOutput: decodedOutputFormatted,
           eventLogs:
             receipt.logs.length !== 0
               ? decodeEventLogs(receipt.logs, abi)
@@ -338,55 +626,31 @@ function App() {
       } else {
         const heading = `❌ [anvil] from : ${short(
           from
-        )} to : ${to} value : ${value} wei data : ${short(input)}`;
+        )} to : ${to} value : ${value} wei data : ${short(inputBytes)}`;
 
         log = {
           heading: heading,
-          status: "0x0 Transaction failed",
+          status: "0x0 Transaction failed.",
+          contractAddress: contractAddress,
           from: from,
           to: to,
           value: `${ethers.formatEther(value)} ETH`,
-          input: input,
+          input: inputBytes,
           decodedInput: decodedInputFormatted,
+          output: outputBytes,
+          reason: error.shortMessage || undefined,
+          error:
+            error.reason === null
+              ? decodeCustomError(error.data, abi)
+              : undefined,
         };
       }
-      setLogData((prev) => [...prev, log]);
+      return log;
     } catch (err) {
-      consoleLog(`error : ${err}`);
+      consoleLog(`error in logs : ${JSON.stringify(err, null, 2)}`);
     }
   }
 
-  function decodeEventLogs(
-    rawLogs: any[],
-    abi: any
-  ): Record<string, Record<string, string>> {
-    const iface = new ethers.Interface(abi);
-    const decodedLogs: Record<string, Record<string, string>> = {};
-
-    for (const log of rawLogs) {
-      try {
-        const parsed = iface.parseLog({
-          topics: log.topics,
-          data: log.data,
-        });
-        if (!parsed) continue;
-
-        const logName = parsed.name;
-        const logData: Record<string, string> = {};
-
-        parsed.fragment.inputs.forEach((input, idx) => {
-          const value = parsed.args[idx];
-          logData[`${input.type} ${input.name}`] = value.toString();
-        });
-
-        decodedLogs[logName] = logData;
-      } catch (err) {
-        continue; // skip unrecognized logs
-      }
-    }
-
-    return decodedLogs;
-  }
   function updateInputValue(
     prev: DeployedContract[],
     contractIndex: number,
@@ -432,137 +696,6 @@ function App() {
     };
 
     return updated;
-  }
-
-  async function handleFunctionCall(
-    functionData: FuncState,
-    contractAddress: string,
-    abi: any,
-    contractIndex: number,
-    functionIndex: number
-  ) {
-    if (functionData.name === undefined) return;
-
-    const signer = new ethers.Wallet(
-      wallets[currentWallet].privateKey,
-      provider
-    );
-
-    const contract = new ethers.Contract(contractAddress, abi, provider);
-    const contractWithSigner = contract.connect(signer);
-    const iff = new ethers.Interface(abi);
-
-    // Prepare arguments
-    const args = parseConstructorArgs(functionData.inputs);
-
-    let result: any;
-
-    // If function is view or pure => call normally
-    if (
-      functionData.stateMutability === "view" ||
-      functionData.stateMutability === "pure"
-    ) {
-      result = await contract[functionData.name](...args);
-
-      setDeployedContract((prev) =>
-        updateOutputValue(prev, contractIndex, functionIndex, `${result}`)
-      );
-      return;
-    }
-    // If function is payable
-    else if (functionData.stateMutability === "payable") {
-      const rawOutput = await provider.call({
-        to: contractAddress,
-        data: iff.encodeFunctionData(functionData.name, [...args]),
-        value: parseEthValue(ethValue, ethFormat),
-      });
-      const decodedOutput = iff.decodeFunctionResult(
-        functionData.name,
-        rawOutput
-      );
-      if (decodedOutput.length !== 0) {
-        setDeployedContract((prev) =>
-          updateOutputValue(
-            prev,
-            contractIndex,
-            functionIndex,
-            `${decodedOutput.toString()}`
-          )
-        );
-      }
-      result = await (contractWithSigner as any)[functionData.name](...args, {
-        value: parseEthValue(ethValue, ethFormat),
-      });
-      setDeployedContract((prevContracts) =>
-        prevContracts.map((contract) =>
-          contract.address === contractAddress
-            ? { ...contract, refreshTick: contract.refreshTick + 1 }
-            : contract
-        )
-      );
-
-      updateWalletBalance();
-      return;
-    }
-    // If function is nonpayable (regular transaction)
-    else if (functionData.stateMutability === "nonpayable") {
-      // Make sure ethValue is empty for nonpayable functions
-      if (ethValue !== "") {
-        vscode.postMessage({
-          id: MessageId.showMessage,
-          data: {
-            id: VSCodeMessage.error,
-            data: `${functionData.name} is not payable function`,
-          },
-        });
-        return; // Important to stop execution
-      }
-
-      // simulation
-      const rawOutput = await provider.call({
-        to: contractAddress,
-        data: iff.encodeFunctionData(functionData.name, [...args]),
-      });
-
-      const decodedOutput = iff.decodeFunctionResult(
-        functionData.name,
-        rawOutput
-      );
-
-      if (decodedOutput.length !== 0) {
-        setDeployedContract((prev) =>
-          updateOutputValue(
-            prev,
-            contractIndex,
-            functionIndex,
-            `${decodedOutput.toString()}`
-          )
-        );
-      }
-
-      // actual call
-      const response = await (contractWithSigner as any)[functionData.name](
-        ...args
-      );
-      const receipt = await response.wait();
-
-      const log = buildLogData(
-        response,
-        receipt,
-        iff,
-        functionData.name,
-        rawOutput,
-        decodedOutput
-      );
-      if (log !== undefined) setLogData((prev) => [...prev, log]);
-      setDeployedContract((prevContracts) =>
-        prevContracts.map((contract) =>
-          contract.address === contractAddress
-            ? { ...contract, refreshTick: contract.refreshTick + 1 }
-            : contract
-        )
-      );
-    }
   }
 
   const updateWalletBalance = () => {

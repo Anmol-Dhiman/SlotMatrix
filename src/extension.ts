@@ -35,7 +35,7 @@ export function activate(context: vscode.ExtensionContext) {
         return `${attr}="${webviewUri}"`;
       });
 
-      console.log(`log : ${JSON.stringify(anvilTerminal, null, 2)}`);
+     
 
       vscode.window.onDidCloseTerminal((t) => {
         if (t.name === "SlotMatrix Anvil Terminal") {
@@ -79,7 +79,7 @@ export function activate(context: vscode.ExtensionContext) {
                   name: "SlotMatrix Anvil Terminal",
                 });
                 anvilTerminal.sendText("anvil");
-                console.log(`log : ${JSON.stringify(anvilTerminal, null, 2)}`);
+               
               } else if (
                 message.data === Terminals.commandTerminal &&
                 commandTerminal === undefined
