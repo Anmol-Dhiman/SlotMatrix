@@ -10,7 +10,7 @@ export type FuncState = {
   name: string;
   stateMutability: string;
   inputs: Input[];
-  outputs?: string;
+  outputs?: Output[];
 };
 
 export type ABIEntry = {

@@ -20,6 +20,7 @@ import {
   DeployedContract,
   LogData,
   WalletData,
+  Output,
 } from "../utils/Types";
 import { ethers } from "ethers";
 
@@ -126,6 +127,11 @@ function App() {
           inputs: func.inputs.map((input: any) => ({
             name: input.name,
             type: input.type,
+            value: "",
+          })),
+          outputs: func.outputs.map((output: any) => ({
+            name: output.name,
+            type: output.type,
             value: "",
           })),
         })
@@ -329,12 +335,26 @@ function App() {
       functionData.stateMutability === "view" ||
       functionData.stateMutability === "pure"
     ) {
-      const result = await contract[functionData.name](...args);
+      try {
+        const result = await contract[functionData.name](...args);
 
-      setDeployedContract((prev) =>
-        updateOutputValue(prev, contractIndex, functionIndex, `${result}`)
-      );
-      return;
+        if (!functionData.outputs) return;
+
+        const resultArray = Array.isArray(result) ? result : [result];
+
+        const newOutput: Output[] = functionData.outputs.map(
+          (v: Output, i: number) => ({
+            ...v,
+            value: `${resultArray[i]}`,
+          })
+        );
+
+        setDeployedContract((prev) =>
+          updateOutputValue(prev, contractIndex, functionIndex, newOutput)
+        );
+      } catch (err) {
+        consoleLog(`view function error: ${JSON.stringify(err, null, 2)}`);
+      }
     } else {
       if (
         functionData.stateMutability === "nonpayable" &&
@@ -354,7 +374,6 @@ function App() {
                 value: 0,
               };
 
-        consoleLog(`value is : ${value.value}`);
         const rawOutput = await provider.call({
           to: contractAddress,
           data: iff.encodeFunctionData(functionData.name, [...args]),
@@ -362,12 +381,27 @@ function App() {
           from: wallets[currentWallet].publicKey,
         });
 
+        const decodedOutput = iff.decodeFunctionResult(
+          functionData.name,
+          rawOutput
+        );
+        if (decodedOutput.length > 0 && functionData.outputs !== undefined) {
+          const newOutput: Output[] = functionData.outputs.map(
+            (v: Output, i) => ({
+              ...v,
+              value: `${decodedOutput[i]}`,
+            })
+          );
+          setDeployedContract((prev) =>
+            updateOutputValue(prev, contractIndex, functionIndex, newOutput)
+          );
+        }
+
         const response = await (contractWithSigner as any)[functionData.name](
           ...args,
           value
         );
 
-        consoleLog("hello world");
         const receipt = await response.wait(0);
 
         updateWalletBalance();
@@ -390,15 +424,6 @@ function App() {
         );
         if (log !== undefined) {
           setLogData((prev) => [...prev, log]);
-          if (log.decodedOutput !== undefined)
-            setDeployedContract((prev) =>
-              updateOutputValue(
-                prev,
-                contractIndex,
-                functionIndex,
-                `${JSON.stringify(log.decodedOutput)}`
-              )
-            );
         }
         // setting refresh tick
         setDeployedContract((prevContracts) =>
@@ -464,7 +489,7 @@ function App() {
     prev: DeployedContract[],
     contractIndex: number,
     functionIndex: number,
-    newValue: string
+    newValue: Output[]
   ): DeployedContract[] {
     const updated = [...prev];
     updated[contractIndex] = { ...updated[contractIndex] };
@@ -853,9 +878,31 @@ function App() {
                           >
                             {functionData.name}
                           </VscodeButton>
-                          <div style={{ marginBottom: "12px" }}>
-                            {functionData.outputs}
-                          </div>
+                          {functionData.outputs &&
+                            functionData.outputs.every(
+                              (output) => output.value !== ""
+                            ) && (
+                              <div style={{ marginBottom: "12px" }}>
+                                {functionData.outputs.map((output, index) => {
+                                  const label = output.name?.trim()
+                                    ? `${index} ${output.type} ${output.name}`
+                                    : `${index} ${output.type}`;
+
+                                  return (
+                                    <div
+                                      key={index}
+                                      style={{
+                                        display: "flex",
+                                        gap: "8px",
+                                      }}
+                                    >
+                                      <span>{label}</span>
+                                      <span>: "{output.value}"</span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
                         </div>
                       )
                     )}
