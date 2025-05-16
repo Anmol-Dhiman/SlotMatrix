@@ -46,7 +46,7 @@ export type LogData = {
   gas?: string;
   input: string;
   output?: string;
-  decodedInput: Record<string, any>;
+  decodedInput?: Record<string, any>;
   decodedOutput?: Record<string, any>;
   eventLogs?: any;
   reason?: string;

@@ -151,6 +151,25 @@ function App() {
           })),
         })
       );
+
+    const hasFallback = abi.some((item) => item.type === "fallback");
+    const hasReceive = abi.some((item) => item.type === "receive");
+
+    if (hasFallback || hasReceive) {
+      result.push({
+        name: "low-level",
+        stateMutability: "payable",
+        inputs: [
+          {
+            name: "calldata",
+            type: "bytes",
+            value: "",
+          },
+        ],
+        outputs: [],
+      });
+    }
+
     return result;
   }
 
@@ -319,7 +338,7 @@ function App() {
     contractIndex: number,
     functionIndex: number
   ) {
-    if (BigInt(ethValue) < 0) {
+    if (BigInt(ethValue) < 0n) {
       showError("Eth value cannot be negative");
       return;
     }
@@ -330,31 +349,107 @@ function App() {
         return;
       }
     }
+
     const signer = new ethers.Wallet(
       wallets[currentWallet].privateKey,
       provider
     );
-
     const contract = new ethers.Contract(contractAddress, abi, provider);
     const contractWithSigner = contract.connect(signer);
-    const iff = new ethers.Interface(abi); //interface
+    const iff = new ethers.Interface(abi);
+    const currentContractData = contractFiles[currentContractFileIndex];
 
-    // Prepare arguments
-    const args = parseArgs(functionData.inputs);
+    // === Fallback Handling ===
+    const isLowLevel = functionData.name === "low-level";
+    const calldataHex = isLowLevel ? functionData.inputs[0].value.trim() : "";
 
-    if (args.length !== functionData.inputs.length) {
-      // error while parsing the args
+    const value =
+      functionData.stateMutability === "payable"
+        ? { value: parseEthValue(ethValue, ethFormat) }
+        : { value: 0 };
+
+    if (isLowLevel) {
+      const isValidBytes = /^0x([0-9a-fA-F]{2})*$/.test(calldataHex);
+      if (calldataHex.length % 2 !== 0 || !isValidBytes) {
+        showError("Invalid bytes value");
+        return;
+      }
+
+      try {
+        const tx = {
+          to: contractAddress,
+          data: calldataHex,
+          value: value.value,
+          from: wallets[currentWallet].publicKey,
+        };
+
+        const response = await signer.sendTransaction(tx);
+        const receipt = await response.wait(0);
+        consoleLog(`receipt value :${JSON.stringify(receipt, null, 2)}`);
+
+        updateWalletBalance();
+
+        const log = buildFunctionCallLogs(
+          true,
+          wallets[currentWallet].publicKey,
+          `${currentContractData.basename}:${currentContractData.contractName}.fallback()`,
+          "fallback",
+          calldataHex,
+          [calldataHex],
+          abi,
+          value.value.toString(),
+          contractAddress,
+          undefined,
+          receipt
+        );
+
+        if (log !== undefined) {
+          setLogData((prev) => [...prev, log]);
+        }
+
+        setDeployedContract((prevContracts) =>
+          prevContracts.map((contract) =>
+            contract.address === contractAddress
+              ? {
+                  ...contract,
+                  refreshTick: contract.refreshTick + 1,
+                  balance: ethers.formatEther(value.value),
+                }
+              : contract
+          )
+        );
+      } catch (err: any) {
+        consoleLog(`fallback call error: ${JSON.stringify(err, null, 2)}`);
+        const log = buildFunctionCallLogs(
+          false,
+          wallets[currentWallet].publicKey,
+         `${currentContractData.basename}:${currentContractData.contractName}.fallback()`,
+          "fallback",
+          calldataHex,
+          [calldataHex],
+          abi,
+          value.value.toString(),
+          contractAddress,
+          err.data,
+          undefined,
+          err
+        );
+        if (log !== undefined) setLogData((prev) => [...prev, log]);
+      }
+
       return;
     }
 
-    // If function is view or pure => call normally
+    // === Normal Function Handling ===
+    const args = parseArgs(functionData.inputs);
+    if (args.length !== functionData.inputs.length) return;
+
     if (
       functionData.stateMutability === "view" ||
       functionData.stateMutability === "pure"
     ) {
       try {
         const result = await contract[functionData.name](...args);
-
         if (!functionData.outputs) return;
 
         const resultArray = Array.isArray(result) ? result : [result];
@@ -375,24 +470,16 @@ function App() {
     } else {
       if (
         functionData.stateMutability === "nonpayable" &&
-        BigInt(ethValue) > 0
+        BigInt(ethValue) > 0n
       ) {
         showError(`${functionData.name} is not payable function`);
         return;
       }
-      const currentContractData = contractFiles[currentContractFileIndex];
-      const value =
-        functionData.stateMutability === "payable"
-          ? {
-              value: parseEthValue(ethValue, ethFormat),
-            }
-          : {
-              value: 0,
-            };
 
       try {
         let rawOutput: any = undefined;
         let decodedOutput: any = undefined;
+
         if (functionData.outputs !== undefined) {
           rawOutput = await provider.call({
             to: contractAddress,
@@ -406,13 +493,15 @@ function App() {
             rawOutput
           );
         }
-        if (decodedOutput.length > 0 && functionData.outputs !== undefined) {
+
+        if (decodedOutput?.length > 0 && functionData.outputs !== undefined) {
           const newOutput: Output[] = functionData.outputs.map(
             (v: Output, i) => ({
               ...v,
               value: `${decodedOutput[i]}`,
             })
           );
+
           setDeployedContract((prev) =>
             updateOutputValue(prev, contractIndex, functionIndex, newOutput)
           );
@@ -422,13 +511,9 @@ function App() {
           ...args,
           value
         );
-
         const receipt = await response.wait(0);
 
         updateWalletBalance();
-        consoleLog(
-          `receipt of function call ${JSON.stringify(receipt, null, 2)}`
-        );
 
         const log = buildFunctionCallLogs(
           true,
@@ -448,7 +533,6 @@ function App() {
           setLogData((prev) => [...prev, log]);
         }
 
-        // setting refresh tick
         setDeployedContract((prevContracts) =>
           prevContracts.map((contract) =>
             contract.address === contractAddress
@@ -461,14 +545,13 @@ function App() {
           )
         );
       } catch (err: any) {
-        consoleLog(`error : ${JSON.stringify(err, null, 2)}`);
-
+        consoleLog(`error: ${JSON.stringify(err, null, 2)}`);
         const log = buildFunctionCallLogs(
           false,
           wallets[currentWallet].publicKey,
           `${currentContractData.basename}:${currentContractData.contractName}.${functionData.name}()`,
           functionData.name,
-          err.transaction.data,
+          err.transaction?.data,
           args,
           abi,
           value.value.toString(),
@@ -477,7 +560,10 @@ function App() {
           undefined,
           err
         );
-        if (log !== undefined) setLogData((prev) => [...prev, log]);
+
+        if (log !== undefined) {
+          setLogData((prev) => [...prev, log]);
+        }
       }
     }
   }

@@ -317,35 +317,46 @@ export function buildFunctionCallLogs(
 ): LogData | undefined {
   try {
     consoleLog("inside function log building");
-    const iface = new ethers.Interface(abi);
-    const functionFragment = iface.getFunction(functionName);
-    if (!functionFragment) return undefined;
 
-    const decodedInputFormatted = Object.fromEntries(
-      args.map((v: any, i: number) => {
-        const input = functionFragment.inputs[i];
-        const key = `${input.type} ${input.name}`;
-        const value = formatInput(v, input);
-        return [key, value];
-      })
-    );
+    const isFallbackOrReceive =
+      functionName === "fallback" || functionName === "receive";
+
+    const iface = new ethers.Interface(abi);
+    let decodedInputFormatted: Record<string, any> | undefined = undefined;
+    let decodedOutputFormatted: Record<string, any> | undefined = undefined;
+
+    if (!isFallbackOrReceive) {
+      const functionFragment = iface.getFunction(functionName);
+      if (!functionFragment) return undefined;
+
+      decodedInputFormatted = Object.fromEntries(
+        args.map((v: any, i: number) => {
+          const input = functionFragment.inputs[i];
+          const key = `${input.type} ${input.name}`;
+          const value = formatInput(v, input);
+          return [key, value];
+        })
+      );
+
+      if (isCallSuccess && outputBytes !== undefined) {
+        const decodedOutput = iface.decodeFunctionResult(
+          functionName,
+          outputBytes
+        );
+        if (decodedOutput.length) {
+          decodedOutputFormatted = Object.fromEntries(
+            decodedOutput.map((v: any, i: number) => {
+              const output = functionFragment.outputs[i];
+              return [`${output.type} ${output.name}`, `${v}`];
+            })
+          );
+        }
+      }
+    }
 
     let log: LogData;
 
-    if (isCallSuccess && outputBytes !== undefined && receipt) {
-      const decodedOutput = iface.decodeFunctionResult(
-        functionName,
-        outputBytes
-      );
-      const decodedOutputFormatted = decodedOutput.length
-        ? Object.fromEntries(
-            decodedOutput.map((v: any, i: number) => [
-              `${functionFragment.outputs[i].type} ${functionFragment.outputs[i].name}`,
-              `${v}`,
-            ])
-          )
-        : {};
-
+    if (isCallSuccess && receipt) {
       log = {
         heading: `✅ [anvil] from : ${short(
           receipt.from
@@ -364,15 +375,13 @@ export function buildFunctionCallLogs(
         input: inputBytes,
         decodedInput: decodedInputFormatted,
         output: outputBytes === "0x" ? undefined : outputBytes,
-        decodedOutput: Object.keys(decodedOutputFormatted).length
-          ? decodedOutputFormatted
-          : undefined,
+        decodedOutput: decodedOutputFormatted,
         eventLogs: receipt.logs.length
           ? decodeEventLogs(receipt.logs, abi)
           : undefined,
       };
     } else {
-      consoleLog(`error message : ${error?.info.error.message}`);
+      consoleLog(`error message : ${error?.info?.error?.message}`);
       log = {
         heading: `❌ [anvil] from : ${short(
           from
@@ -385,7 +394,7 @@ export function buildFunctionCallLogs(
         input: inputBytes,
         decodedInput: decodedInputFormatted,
         output: outputBytes,
-        reason: error?.info.error.message,
+        reason: error?.info?.error?.message,
         error:
           error?.reason === null
             ? decodeCustomError(error.data, abi)
