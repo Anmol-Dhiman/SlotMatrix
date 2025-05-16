@@ -1,8 +1,9 @@
-import { ethers, toBigInt } from "ethers";
+import { ethers } from "ethers";
 import { useEffect, useState } from "react";
- 
+
 import JsonView from "@uiw/react-json-view";
 import { vscodeTheme } from "@uiw/react-json-view/vscode";
+import { consoleLog } from "../../utils/HelperFunc";
 
 interface StorageLayoutInterface {
   storageLayout: {
@@ -32,7 +33,6 @@ function StorageLayout({
   contractAddress,
   refreshTick,
 }: StorageLayoutInterface) {
-  //   const [storageData, setStorageData] = useState<StorageDataType[]>([]);
   const [nestedTree, setNestedTree] = useState<TreeNode[]>([]);
   useEffect(() => {
     (async () => {
@@ -84,7 +84,6 @@ function StorageLayout({
     label: string,
     depth = 0
   ): Promise<StorageDataType[]> {
-    
     const slotStorageValue = await getStorageValue(slot.toString());
     const rawBytes = ethers.getBytes(slotStorageValue);
     const isShortString = rawBytes[0] !== 0;
@@ -127,7 +126,6 @@ function StorageLayout({
     arrayType: any,
     depth = 0
   ): Promise<StorageDataType[]> {
-   
     const result: StorageDataType[] = [];
 
     const type = storageLayout.types[arrayType];
@@ -156,67 +154,78 @@ function StorageLayout({
   }
 
   async function getStructStorage(
-    storage: any,
+    baseType: any,
+    baseSlot: any,
+    baseLabel: string,
     depth = 0
   ): Promise<StorageDataType[]> {
-    
     const slotMap = new Map<bigint, StorageDataType>();
-    const baseType = storageLayout.types[storage.type];
-    const baseSlot = storage.slot;
-    const label = storage.label;
+    consoleLog(`base values ${baseType}`);
+    consoleLog(`base values ${baseSlot}`);
+    consoleLog(`base values ${depth}`);
+    consoleLog(`base values ${baseLabel}`);
 
     for (const member of baseType.members) {
-      
+      const label = `${baseLabel} -> ${member.label}`;
       const type = member.type;
-     
-      const slot = toBigInt(parseInt(baseSlot) + parseInt(member.slot));
-    
+
+      consoleLog(`label value  : ${label}`);
+      consoleLog(`type value  : ${type}`);
+      const slot = BigInt(baseSlot) + BigInt(member.slot);
+      consoleLog(`slot difference  : ${type}`);
+
       const isPackedType =
         type.startsWith("t_bool") ||
         type.startsWith("t_uint") ||
         type.startsWith("t_int") ||
         type.startsWith("t_address") ||
         type.startsWith("t_enum");
-      
+
       let dataArray;
       if (isPackedType) {
-        
+        consoleLog("inside packed");
         if (slotMap.has(slot)) {
           const existing = slotMap.get(slot)!;
           existing.label += `, ${label}`;
           slotMap.set(slot, existing);
         } else {
           const value = await getStorageValue(slot.toString());
-         
+
           slotMap.set(slot, {
             slot: slot.toString(),
             label: label,
             value: value,
-            noOfParents: 0,
+            noOfParents: depth,
           });
         }
       } else if (type.startsWith("t_array") && type.endsWith("dyn_storage")) {
         dataArray = await getDynamicArrayStorage(
-          storageLayout.types[storage.type],
+          storageLayout.types[type],
           slot,
-          label
+          label,
+          depth + 1
         );
       } else if (type.startsWith("t_array") && type.endsWith("_storage")) {
-        dataArray = await getStaticArrayStorage(slot, label, type);
+        dataArray = await getStaticArrayStorage(slot, label, type, depth );
       } else if (type.startsWith("t_mapping")) {
         slotMap.set(slot, {
           slot: slot.toString(),
           label: label,
           value: await getStorageValue(slot.toString()),
-          noOfParents: 0,
+          noOfParents: depth,
         });
       } else if (
         type.startsWith("t_string_storage") ||
         type.startsWith("t_bytes_storage")
       ) {
-        dataArray = await getStringOrBytesStorage(slot, label);
+        dataArray = await getStringOrBytesStorage(slot, label, depth );
       } else if (type.startsWith("t_struct")) {
-        dataArray = await getStructStorage(storage, depth + 1);
+        dataArray = await getStructStorage(
+          storageLayout.types[type],
+          slot,
+          label,
+          depth 
+        );
       }
       if (dataArray !== undefined)
         for (const data of dataArray) {
@@ -233,12 +242,14 @@ function StorageLayout({
     labelPrefix: string,
     depth = 0
   ): Promise<StorageDataType[]> {
-    
+    consoleLog("inside dynamic array");
     const base = `${type.base}`.trim();
+    consoleLog(`base type ${base}`);
     const result: StorageDataType[] = [];
 
     // Get array length
     const rawLength = await getStorageValue(baseSlot);
+    consoleLog(`raw length ; ${rawLength.toString()}`);
     result.push({
       slot: `${baseSlot}`,
       label: labelPrefix,
@@ -268,6 +279,17 @@ function StorageLayout({
             `${labelPrefix}[${i}]`,
             depth + 1
           );
+          result.push(...data);
+        } else if (base.startsWith("t_struct")) {
+          consoleLog("inside struct");
+          const data = await getStructStorage(
+            storageLayout.types[type.base],
+            ethers.toBigInt(baseDataSlot) +
+              BigInt(i * (storageLayout.types[type.base].numberOfBytes / 32)),
+            `${labelPrefix}[${i}]`,
+            depth + 1
+          );
+          consoleLog(`return data value : ${JSON.stringify(data, null, 2)}`);
           result.push(...data);
         } else {
           const value = await getStorageValue(elementSlotStr);
@@ -305,7 +327,6 @@ function StorageLayout({
 
       //normal type variables also could be packed
       if (isPackedType) {
-       
         if (slotMap.has(slot)) {
           // Append label to existing entry
           const existing = slotMap.get(slot)!;
@@ -345,7 +366,11 @@ function StorageLayout({
       ) {
         dataArray = await getStringOrBytesStorage(slot, label);
       } else if (type.startsWith("t_struct")) {
-        dataArray = await getStructStorage(storage);
+        dataArray = await getStructStorage(
+          storageLayout.types[storage.type],
+          storage.slot,
+          storage.label
+        );
       }
 
       if (dataArray !== undefined)
