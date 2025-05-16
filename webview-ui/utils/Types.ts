@@ -1,7 +1,9 @@
+//used while taking input from user
 export type Input = {
   name: string;
   type: string;
   value: string;
+  components?: Input[];
 };
 
 export type Output = Input;

@@ -127,11 +127,23 @@ function App() {
         (func): FuncState => ({
           name: func.name,
           stateMutability: func.stateMutability,
-          inputs: func.inputs.map((input: any) => ({
-            name: input.name,
-            type: input.type,
-            value: "",
-          })),
+          inputs: func.inputs.map((input: any) => {
+            const base: any = {
+              name: input.name,
+              type: input.type,
+              value: "",
+            };
+
+            if (input.type === "tuple" || input.type === "tuple[]") {
+              base.components = input.components.map((c: any) => ({
+                name: c.name,
+                type: c.type,
+                value: "",
+              }));
+            }
+
+            return base;
+          }),
           outputs: func.outputs.map((output: any) => ({
             name: output.name,
             type: output.type,
@@ -329,6 +341,7 @@ function App() {
 
     // Prepare arguments
     const args = parseArgs(functionData.inputs);
+
     if (args.length !== functionData.inputs.length) {
       // error while parsing the args
       return;
@@ -368,16 +381,16 @@ function App() {
         return;
       }
       const currentContractData = contractFiles[currentContractFileIndex];
-      try {
-        const value =
-          functionData.stateMutability === "payable"
-            ? {
-                value: parseEthValue(ethValue, ethFormat),
-              }
-            : {
-                value: 0,
-              };
+      const value =
+        functionData.stateMutability === "payable"
+          ? {
+              value: parseEthValue(ethValue, ethFormat),
+            }
+          : {
+              value: 0,
+            };
 
+      try {
         const rawOutput = await provider.call({
           to: contractAddress,
           data: iff.encodeFunctionData(functionData.name, [...args]),
@@ -421,11 +434,12 @@ function App() {
           response.data,
           args,
           abi,
-          parseEthValue(ethValue, ethFormat).toString(),
+          value.value.toString(),
           contractAddress,
           rawOutput,
           receipt
         );
+
         if (log !== undefined) {
           setLogData((prev) => [...prev, log]);
         }
@@ -444,7 +458,7 @@ function App() {
         );
       } catch (err: any) {
         consoleLog(`error : ${JSON.stringify(err, null, 2)}`);
-        consoleLog(err.info.error.message);
+
         const log = buildFunctionCallLogs(
           false,
           wallets[currentWallet].publicKey,
@@ -453,7 +467,7 @@ function App() {
           err.transaction.data,
           args,
           abi,
-          parseEthValue(ethValue, ethFormat).toString(),
+          value.value.toString(),
           contractAddress,
           err.data,
           undefined,
@@ -512,6 +526,8 @@ function App() {
   }
 
   const updateWalletBalance = () => {
+    consoleLog(ethValue);
+
     setWalletData((prevWallets) => {
       const updatedWallets = [...prevWallets];
       const current = updatedWallets[currentWallet];
@@ -723,9 +739,6 @@ function App() {
 
           <VscodeButton
             onClick={() => {
-              // vscode.postMessage({
-              //   id: MessageId.deployFlag,
-              // });
               handleDeploy();
             }}
             style={{
@@ -797,7 +810,7 @@ function App() {
                   setLogData([]);
                   setDeployedContract([]);
                   setWalletData(AnvilKeys);
-                  // re run anvil
+                  // TODO rerun anvil
                 }}
                 style={{ cursor: "pointer" }}
                 title="Reset all"
@@ -937,7 +950,12 @@ function App() {
                             functionData.outputs.every(
                               (output) => output.value !== ""
                             ) && (
-                              <div style={{ marginBottom: "12px" }}>
+                              <div
+                                style={{
+                                  marginBottom: "12px",
+                                  maxWidth: "25vw",
+                                }}
+                              >
                                 {functionData.outputs.map((output, index) => {
                                   const label = output.name?.trim()
                                     ? `${index} ${output.type} ${output.name}`
@@ -948,11 +966,22 @@ function App() {
                                       key={index}
                                       style={{
                                         display: "flex",
-                                        gap: "8px",
+                                        gap: "4px",
+                                        flexDirection: "row",
+                                        alignItems: "flex-start",
+                                        wordBreak: "break-word",
+                                        overflowWrap: "break-word",
+                                        whiteSpace: "normal",
                                       }}
                                     >
-                                      <span>{label}</span>
-                                      <span>: "{output.value}"</span>
+                                      <span
+                                        style={{
+                                          wordBreak: "break-word",
+                                          overflowWrap: "break-word",
+                                        }}
+                                      >
+                                        {label} : "{output.value}"
+                                      </span>
                                     </div>
                                   );
                                 })}

@@ -38,17 +38,17 @@ export function parseArgs(inputs: Input[]): any[] {
           const max = (1n << BigInt(bits)) - 1n;
           if (inputValue < 0n || inputValue > max) {
             showError(`Value ${inputValue} is out of range for ${type}`);
-            continue;
+            return [];
           }
         } else {
           const min = -(1n << (BigInt(bits) - 1n));
           const max = (1n << (BigInt(bits) - 1n)) - 1n;
           if (inputValue < min || inputValue > max) {
             showError(`Value ${inputValue} is out of range for ${type}`);
-            continue;
+            return [];
           }
         }
-        result.push(inputValue);
+        result.push(inputValue.toString());
       } else if (type === "address") {
         if (ethers.isAddress(value)) {
           result.push(value);
@@ -72,20 +72,69 @@ export function parseArgs(inputs: Input[]): any[] {
         }
       } else if (type.endsWith("[]")) {
         const elementType = type.slice(0, -2);
+
         const parsedArray = JSON.parse(value);
         if (!Array.isArray(parsedArray)) {
           showError(`Value for ${name} is not a valid array`);
-          continue;
+          return [];
         }
 
         const parsedArrayValue = parsedArray.map(
           (item) =>
-            parseArgs([{ name: "", type: elementType, value: String(item) }])[0]
+            parseArgs([
+              {
+                name: "",
+                type: elementType,
+                value: JSON.stringify(item),
+                components: input.components,
+              },
+            ])[0]
         );
+        
         result.push(parsedArrayValue);
+      } else if (type === "tuple") {
+        const parsedArray = JSON.parse(value);
+
+        if (parsedArray === null || !Array.isArray(parsedArray)) {
+          showError(`Invalid tuple value for ${name}, must be an object`);
+          return [];
+        }
+
+        if (!input.components) {
+          showError(
+            `Missing components definition for tuple ${name} : code error`
+          );
+          return [];
+        }
+
+        if (parsedArray.length !== input.components.length) {
+          showError(
+            `Tuple ${name} expects ${input.components.length} values but got ${value.length}`
+          );
+          return [];
+        }
+
+        const tupleValue: any = {};
+
+        for (let i = 0; i < input.components.length; i++) {
+          const component = input.components[i];
+          const componentValue = parsedArray[i];
+
+          const parsed = parseArgs([
+            {
+              name: component.name,
+              type: component.type,
+              value: componentValue,
+              components: component.components,
+            },
+          ]);
+
+          tupleValue[component.name] = parsed[0];
+        }
+
+        result.push(tupleValue);
       } else {
-        // Fallback for unsupported types
-        result.push(value);
+        consoleLog("invalid args type");
       }
     } catch (err) {
       showError(`Error parsing input ${name}: ${(err as Error).message}`);
@@ -225,6 +274,29 @@ export function buildDeploymentLog(
   }
 }
 
+function formatInput(value: any, input: any): any {
+  if (input.type === "tuple") {
+    const components = input.components || [];
+    const formatted: Record<string, any> = {};
+    components.forEach((comp: any, idx: number) => {
+      const compValue = value[comp.name] ?? value[idx];
+      formatted[`${comp.type} ${comp.name}`] = compValue;
+    });
+
+    return formatted;
+  } else if (input.type === "tuple[]") {
+    const components = input.arrayChildren.components || [];
+    const formatted: any[] = [];
+    value.forEach((v: any) => {
+      formatted.push(formatInput(v, { type: "tuple", components: components }));
+    });
+
+    return formatted;
+  } else {
+    return value;
+  }
+}
+
 export function buildFunctionCallLogs(
   isCallSuccess: boolean,
   from: string,
@@ -246,10 +318,12 @@ export function buildFunctionCallLogs(
     if (!functionFragment) return undefined;
 
     const decodedInputFormatted = Object.fromEntries(
-      args.map((v: any, i: number) => [
-        `${functionFragment.inputs[i].type} ${functionFragment.inputs[i].name}`,
-        `${v}`,
-      ])
+      args.map((v: any, i: number) => {
+        const input = functionFragment.inputs[i];
+        const key = `${input.type} ${input.name}`;
+        const value = formatInput(v, input);
+        return [key, value];
+      })
     );
 
     let log: LogData;
