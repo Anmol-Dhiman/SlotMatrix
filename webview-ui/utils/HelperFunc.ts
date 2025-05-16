@@ -1,7 +1,6 @@
 import { MessageId, VSCodeMessage } from "../../src/MessageId";
 import { ethers } from "ethers";
 import { Input, LogData } from "./Types";
-
 import { vscode } from "../src/App";
 
 export function consoleLog(message: string) {
@@ -11,16 +10,27 @@ export function consoleLog(message: string) {
   });
 }
 
+export function showError(message: string) {
+  vscode.postMessage({
+    id: MessageId.showMessage,
+    data: {
+      id: VSCodeMessage.error,
+      data: message,
+    },
+  });
+}
+
 export function parseArgs(inputs: Input[]): any[] {
-  let result: any[] = [];
+  const result: any[] = [];
+
   for (const input of inputs) {
-    const type = input.type;
-    const value = input.value;
-    if (
-      (type.startsWith("uint") || type.startsWith("int")) &&
-      !type.endsWith("[]")
-    ) {
-      try {
+    const { type, value, name } = input;
+
+    try {
+      if (
+        (type.startsWith("uint") || type.startsWith("int")) &&
+        !type.endsWith("[]")
+      ) {
         const bits = parseInt(type.replace(/\D/g, "")) || 256;
         const inputValue = BigInt(value);
 
@@ -28,70 +38,57 @@ export function parseArgs(inputs: Input[]): any[] {
           const max = (1n << BigInt(bits)) - 1n;
           if (inputValue < 0n || inputValue > max) {
             showError(`Value ${inputValue} is out of range for ${type}`);
-          } else {
-            result.push(inputValue);
+            continue;
           }
         } else {
           const min = -(1n << (BigInt(bits) - 1n));
           const max = (1n << (BigInt(bits) - 1n)) - 1n;
           if (inputValue < min || inputValue > max) {
             showError(`Value ${inputValue} is out of range for ${type}`);
-          } else {
-            result.push(inputValue);
+            continue;
           }
         }
-      } catch (err) {
-        showError(
-          `parsing constructor args failed for input ${input.name} : ${err}`
-        );
-      }
-    } else if (type === "address") {
-      if (ethers.isAddress(value)) {
-        result.push(value);
-      } else {
-        showError(`${input.name} is not typeof address`);
-      }
-    } else if (type === "bool") {
-      try {
-        const boolValue = BigInt(value);
-        if (boolValue === 1n || boolValue === 0n) {
-          result.push(boolValue);
+        result.push(inputValue);
+      } else if (type === "address") {
+        if (ethers.isAddress(value)) {
+          result.push(value);
         } else {
-          showError("Invalid bool value");
+          showError(`${name} is not a valid address`);
         }
-      } catch (err) {
-        showError(
-          `parsing constructor args failed for input ${input.name} : ${err}`
-        );
-      }
-    } else if (type === "string") {
-      result.push(value);
-    } else if (type.startsWith("bytes")) {
-      if (/^0x[0-9a-fA-F]*$/.test(value) && value.length % 2 === 0) {
+      } else if (type === "bool") {
+        const boolValue = BigInt(value);
+        if (boolValue === 0n || boolValue === 1n) {
+          result.push(Boolean(boolValue));
+        } else {
+          showError(`Invalid bool value for ${name}`);
+        }
+      } else if (type === "string") {
         result.push(value);
-      } else {
-        showError(`Invalid bytes value for ${input.name}`);
-      }
-    } else if (type.endsWith("[]")) {
-      const elementType = type.replace("[]", "");
-
-      let parsedArray;
-      try {
-        parsedArray = JSON.parse(value);
-        const parsedArrayValue: any[] = [];
-
-        for (const parsedValue of parsedArray) {
-          const data = parseArgs([
-            { name: "", type: elementType, value: `${parsedValue}` },
-          ])[0];
-
-          parsedArrayValue.push(data);
+      } else if (type.startsWith("bytes")) {
+        if (/^0x[0-9a-fA-F]*$/.test(value) && value.length % 2 === 0) {
+          result.push(value);
+        } else {
+          showError(`Invalid bytes value for ${name}`);
+        }
+      } else if (type.endsWith("[]")) {
+        const elementType = type.slice(0, -2);
+        const parsedArray = JSON.parse(value);
+        if (!Array.isArray(parsedArray)) {
+          showError(`Value for ${name} is not a valid array`);
+          continue;
         }
 
+        const parsedArrayValue = parsedArray.map(
+          (item) =>
+            parseArgs([{ name: "", type: elementType, value: String(item) }])[0]
+        );
         result.push(parsedArrayValue);
-      } catch (err) {
-        showError(`Invalid array for input : ${input.name}, error : ${err}`);
+      } else {
+        // Fallback for unsupported types
+        result.push(value);
       }
+    } catch (err) {
+      showError(`Error parsing input ${name}: ${(err as Error).message}`);
     }
   }
 
@@ -105,119 +102,13 @@ export function parseEthValue(
   try {
     return ethers.parseUnits(inputValue, unit.toLowerCase());
   } catch (err) {
-    console.error("Invalid ETH value or unit:", err);
+    consoleLog("Invalid ETH value or unit:" + JSON.stringify(err, null, 2));
     return ethers.toBigInt(0);
   }
 }
 
-export function buildFunctionCallLogs(
-  isCallSuccess: Boolean,
-  from: string,
-  to: string, // contract + function name
-  functionName: string,
-  inputBytes: string,
-  args: any[],
-  abi: any,
-  value: string, //eth value in wei,
-  contractAddress: string,
-  outputBytes?: string,
-  receipt?: any,
-  error?: any
-): LogData | undefined {
-  try {
-    consoleLog("inside function log building");
-
-    const iface = new ethers.Interface(abi);
-
-    const functionFragment = iface.getFunction(functionName);
-    if (functionFragment === null) return undefined;
-    const decodedInputFormatted = Object.fromEntries(
-      args.map((v: any, i: number) => [
-        `${functionFragment.inputs[i].type} ${functionFragment.inputs[i].name}`,
-        `${v}`,
-      ])
-    );
-
-    let log: LogData;
-    if (isCallSuccess && outputBytes !== undefined) {
-      const decodedOutput = iface.decodeFunctionResult(
-        functionName,
-        outputBytes
-      );
-      const decodedOutputFormatted = decodedOutput
-        ? Object.fromEntries(
-            decodedOutput.map((v: any, i: number) => [
-              `${functionFragment.outputs[i].type} ${functionFragment.outputs[i].name}`,
-              `${v}`,
-            ])
-          )
-        : {};
-
-      const heading = `✅ [anvil] from : ${short(
-        receipt.from
-      )} to : ${to} value : ${value} wei data : ${short(
-        inputBytes
-      )} hash : ${short(receipt.hash)} `;
-
-      log = {
-        heading: heading,
-        status: "0x1 Transaction mined and execution succeed",
-        from: receipt.from,
-        to: `${to}`,
-        value: `${ethers.formatEther(value)} ETH`,
-        blockHash: receipt.blockHash,
-        blockNumber: receipt.blockNumber,
-        transactionHash: receipt.hash,
-        gas: receipt.gasUsed,
-        contractAddress: contractAddress,
-        input: inputBytes,
-        decodedInput: decodedInputFormatted,
-        output: outputBytes === "0x" ? undefined : outputBytes,
-        decodedOutput:
-          Object.keys(decodedOutputFormatted).length === 0
-            ? undefined
-            : decodedOutputFormatted,
-        eventLogs:
-          receipt.logs.length !== 0
-            ? decodeEventLogs(receipt.logs, abi)
-            : undefined,
-      };
-    } else {
-      const heading = `❌ [anvil] from : ${short(
-        from
-      )} to : ${to} value : ${value} wei data : ${short(inputBytes)}`;
-
-      log = {
-        heading: heading,
-        status: "0x0 Transaction failed.",
-        contractAddress: contractAddress,
-        from: from,
-        to: to,
-        value: `${ethers.formatEther(value)} ETH`,
-        input: inputBytes,
-        decodedInput: decodedInputFormatted,
-        output: outputBytes,
-        reason: error.shortMessage || undefined,
-        error:
-          error.reason === null
-            ? decodeCustomError(error.data, abi)
-            : undefined,
-      };
-    }
-    return log;
-  } catch (err) {
-    consoleLog(`error in logs : ${JSON.stringify(err, null, 2)}`);
-  }
-}
-
-export function showError(message: string) {
-  vscode.postMessage({
-    id: MessageId.showMessage,
-    data: {
-      id: VSCodeMessage.error,
-      data: message,
-    },
-  });
+export function short(val: string): string {
+  return val.length > 10 ? `${val.slice(0, 5)}...${val.slice(-5)}` : val;
 }
 
 export async function getFutureContractAddress(
@@ -225,77 +116,7 @@ export async function getFutureContractAddress(
 ): Promise<string> {
   const provider = new ethers.JsonRpcProvider("http://localhost:8545");
   const nonce = await provider.getTransactionCount(deployerAddress);
-
   return ethers.getCreateAddress({ from: deployerAddress, nonce });
-}
-
-export const short = (val: string) =>
-  val.length > 10 ? `${val.slice(0, 5)}...${val.slice(-5)}` : val;
-
-export async function buildDeploymentLog(
-  isDeployedSuccess: boolean,
-  from: string,
-  to: string,
-  value: string,
-  input: string,
-  args: any[],
-  abi: any,
-  receipt?: any
-): Promise<LogData> {
-  consoleLog("inside build log");
-  const constructorAbi = abi.find((i: any) => i.type === "constructor");
-  let decodedInputFormatted = {};
-  if (constructorAbi) {
-    decodedInputFormatted = Object.fromEntries(
-      args.map((v: any, i: number) => [
-        `${constructorAbi.inputs[i].type} ${constructorAbi.inputs[i].name}`,
-        `${v}`,
-      ])
-    );
-  }
-
-  let log: LogData;
-
-  if (isDeployedSuccess) {
-    const heading = `✅ [anvil] from : ${short(
-      from
-    )} to : ${to} value : ${value} wei data : ${short(input)} hash : ${short(
-      receipt.hash
-    )} `;
-    log = {
-      heading: heading,
-      status: "0x1 Transaction mined and execution succeed",
-      from: from,
-      to: to,
-      value: `${ethers.formatEther(value)} ETH`,
-      input: input,
-      decodedInput: decodedInputFormatted,
-      blockHash: receipt.blockHash,
-      blockNumber: receipt.blockNumber,
-      transactionHash: receipt.hash,
-      gas: receipt.gasUsed,
-      contractAddress: receipt.contractAddress,
-      eventLogs:
-        receipt.logs.length !== 0
-          ? decodeEventLogs(receipt.logs, abi)
-          : undefined,
-    };
-  } else {
-    const heading = `❌ [anvil] from : ${short(
-      from
-    )} to : ${to} value : ${value} wei data : ${short(input)}`;
-
-    log = {
-      heading: heading,
-      status: "0x0 Transaction failed",
-      from: from,
-      to: to,
-      value: `${ethers.formatEther(value)} ETH`,
-      input: input,
-      decodedInput: decodedInputFormatted,
-    };
-  }
-  return log;
 }
 
 export function decodeEventLogs(
@@ -307,23 +128,17 @@ export function decodeEventLogs(
 
   for (const log of rawLogs) {
     try {
-      const parsed = iface.parseLog({
-        topics: log.topics,
-        data: log.data,
-      });
+      const parsed = iface.parseLog({ topics: log.topics, data: log.data });
       if (!parsed) continue;
 
-      const logName = parsed.name;
       const logData: Record<string, string> = {};
-
       parsed.fragment.inputs.forEach((input, idx) => {
-        const value = parsed.args[idx];
-        logData[`${input.type} ${input.name}`] = value.toString();
+        logData[`${input.type} ${input.name}`] = parsed.args[idx].toString();
       });
 
-      decodedLogs[logName] = logData;
-    } catch (err) {
-      continue; // skip unrecognized logs
+      decodedLogs[parsed.name] = logData;
+    } catch {
+      // Ignore unrecognized logs
     }
   }
 
@@ -340,21 +155,169 @@ export function decodeCustomError(
   try {
     const parsed = iface.parseError(errorData);
     if (!parsed) return;
-    consoleLog("hello world");
-    const errorName = parsed.name;
-    consoleLog(errorName);
-    const errorArgs: Record<string, string> = {};
 
+    const errorArgs: Record<string, string> = {};
     parsed.fragment.inputs.forEach((input, idx) => {
-      const value = parsed.args[idx];
-      errorArgs[`${input.type} ${input.name}`] = value.toString();
+      errorArgs[`${input.type} ${input.name}`] = parsed.args[idx].toString();
     });
 
+    return { [parsed.name]: errorArgs };
+  } catch {
+    return undefined;
+  }
+}
+
+export function buildDeploymentLog(
+  isDeployedSuccess: boolean,
+  from: string,
+  to: string,
+  value: string,
+  input: string,
+  args: any[],
+  abi: any,
+  receipt?: any
+): LogData {
+  consoleLog("inside build log");
+  const constructorAbi = abi.find((item: any) => item.type === "constructor");
+  const decodedInputFormatted = constructorAbi
+    ? Object.fromEntries(
+        args.map((v: any, i: number) => [
+          `${constructorAbi.inputs[i].type} ${constructorAbi.inputs[i].name}`,
+          `${v}`,
+        ])
+      )
+    : {};
+
+  if (isDeployedSuccess && receipt) {
     return {
-      [errorName]: errorArgs,
+      heading: `✅ [anvil] from : ${short(
+        from
+      )} to : ${to} value : ${value} wei data : ${short(input)} hash : ${short(
+        receipt.hash
+      )}`,
+      status: "0x1 Transaction mined and execution succeed",
+      from,
+      to,
+      value: `${ethers.formatEther(value)} ETH`,
+      input,
+      decodedInput: decodedInputFormatted,
+      blockHash: receipt.blockHash,
+      blockNumber: receipt.blockNumber,
+      transactionHash: receipt.hash,
+      gas: receipt.gasUsed,
+      contractAddress: receipt.contractAddress,
+      eventLogs: receipt.logs.length
+        ? decodeEventLogs(receipt.logs, abi)
+        : undefined,
     };
+  } else {
+    return {
+      heading: `❌ [anvil] from : ${short(
+        from
+      )} to : ${to} value : ${value} wei data : ${short(input)}`,
+      status: "0x0 Transaction failed",
+      from,
+      to,
+      value: `${ethers.formatEther(value)} ETH`,
+      input,
+      decodedInput: decodedInputFormatted,
+    };
+  }
+}
+
+export function buildFunctionCallLogs(
+  isCallSuccess: boolean,
+  from: string,
+  to: string,
+  functionName: string,
+  inputBytes: string,
+  args: any[],
+  abi: any,
+  value: string,
+  contractAddress: string,
+  outputBytes?: string,
+  receipt?: any,
+  error?: any
+): LogData | undefined {
+  try {
+    consoleLog("inside function log building");
+    const iface = new ethers.Interface(abi);
+    const functionFragment = iface.getFunction(functionName);
+    if (!functionFragment) return undefined;
+
+    const decodedInputFormatted = Object.fromEntries(
+      args.map((v: any, i: number) => [
+        `${functionFragment.inputs[i].type} ${functionFragment.inputs[i].name}`,
+        `${v}`,
+      ])
+    );
+
+    let log: LogData;
+
+    if (isCallSuccess && outputBytes !== undefined && receipt) {
+      const decodedOutput = iface.decodeFunctionResult(
+        functionName,
+        outputBytes
+      );
+      const decodedOutputFormatted = decodedOutput.length
+        ? Object.fromEntries(
+            decodedOutput.map((v: any, i: number) => [
+              `${functionFragment.outputs[i].type} ${functionFragment.outputs[i].name}`,
+              `${v}`,
+            ])
+          )
+        : {};
+
+      log = {
+        heading: `✅ [anvil] from : ${short(
+          receipt.from
+        )} to : ${to} value : ${value} wei data : ${short(
+          inputBytes
+        )} hash : ${short(receipt.hash)}`,
+        status: "0x1 Transaction mined and execution succeed",
+        from: receipt.from,
+        to,
+        value: `${ethers.formatEther(value)} ETH`,
+        blockHash: receipt.blockHash,
+        blockNumber: receipt.blockNumber,
+        transactionHash: receipt.hash,
+        gas: receipt.gasUsed,
+        contractAddress,
+        input: inputBytes,
+        decodedInput: decodedInputFormatted,
+        output: outputBytes === "0x" ? undefined : outputBytes,
+        decodedOutput: Object.keys(decodedOutputFormatted).length
+          ? decodedOutputFormatted
+          : undefined,
+        eventLogs: receipt.logs.length
+          ? decodeEventLogs(receipt.logs, abi)
+          : undefined,
+      };
+    } else {
+      consoleLog(`error message : ${error?.info.error.message}`);
+      log = {
+        heading: `❌ [anvil] from : ${short(
+          from
+        )} to : ${to} value : ${value} wei data : ${short(inputBytes)}`,
+        status: "0x0 Transaction failed.",
+        contractAddress,
+        from,
+        to,
+        value: `${ethers.formatEther(value)} ETH`,
+        input: inputBytes,
+        decodedInput: decodedInputFormatted,
+        output: outputBytes,
+        reason: error?.info.error.message,
+        error:
+          error?.reason === null
+            ? decodeCustomError(error.data, abi)
+            : undefined,
+      };
+    }
+
+    return log;
   } catch (err) {
-    // Not a custom error or ABI mismatch
+    consoleLog(`error in logs : ${JSON.stringify(err, null, 2)}`);
     return undefined;
   }
 }

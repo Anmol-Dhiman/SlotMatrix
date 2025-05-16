@@ -23,6 +23,7 @@ export function activate(context: vscode.ExtensionContext) {
           ],
         }
       );
+
       // getWebViewContent
       const htmlPath = path.join(context.extensionPath, "media", "index.html");
       let html = fs.readFileSync(htmlPath, "utf8");
@@ -35,13 +36,7 @@ export function activate(context: vscode.ExtensionContext) {
         return `${attr}="${webviewUri}"`;
       });
 
-     
-
-      vscode.window.onDidCloseTerminal((t) => {
-        if (t.name === "SlotMatrix Anvil Terminal") {
-          anvilTerminal = undefined;
-        }
-      });
+      vscode.commands.executeCommand("setContext", "slotmatrixPanelOpen", true);
 
       panel.webview.html = html;
       panel.webview.onDidReceiveMessage(
@@ -79,7 +74,6 @@ export function activate(context: vscode.ExtensionContext) {
                   name: "SlotMatrix Anvil Terminal",
                 });
                 anvilTerminal.sendText("anvil");
-               
               } else if (
                 message.data === Terminals.commandTerminal &&
                 commandTerminal === undefined
@@ -164,9 +158,19 @@ export function activate(context: vscode.ExtensionContext) {
         context.subscriptions
       );
       panel.onDidDispose(() => {
+        vscode.commands.executeCommand(
+          "setContext",
+          "slotmatrixPanelOpen",
+          false
+        );
         anvilTerminal?.dispose();
         commandTerminal?.dispose();
       });
+    })
+  );
+  context.subscriptions.push(
+    vscode.commands.registerCommand("slotmatrix.customSave", () => {
+      runBuildCommand();
     })
   );
 }

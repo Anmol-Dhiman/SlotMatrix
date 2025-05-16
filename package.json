@@ -16,6 +16,23 @@
       {
         "command": "slotmatrix.panelView",
         "title": "SlotMatrix"
+      },
+      {
+        "command": "slotmatrix.customSave",
+        "title": "SlotMatrix Custom Save"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "slotmatrix.customSave",
+        "key": "ctrl+s",
+        "when": "slotmatrixPanelOpen"
+      },
+      {
+        "command": "slotmatrix.customSave",
+        "key": "cmd+s",
+        "mac": "cmd+s",
+        "when": "slotmatrixPanelOpen"
       }
     ]
   },

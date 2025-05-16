@@ -89,6 +89,7 @@ function App() {
 
   const [logData, setLogData] = useState<LogData[]>([]);
   const [atAddress, setAtAddress] = useState("");
+  const [showCheck, setShowCheck] = useState(false);
 
   window.addEventListener("message", (event) => {
     const { id, data } = event.data;
@@ -100,6 +101,8 @@ function App() {
       setCurrentContractJsonData(data);
       setConstructorInputs(buildInitialConstructorState(data.abi[0])); // setting constructor input state
     } else if (id === MessageId.buildCommandRunSuccess) {
+      setShowCheck(true);
+      setTimeout(() => setShowCheck(false), 3000);
       getAbiMessage();
     }
   });
@@ -162,6 +165,7 @@ function App() {
   }, [currentContractFileIndex, pwd]);
 
   const getAbiMessage = () => {
+    consoleLog("getting abi ");
     if (pwd === undefined) return;
 
     vscode.postMessage({
@@ -251,10 +255,10 @@ function App() {
         response = contract.deploymentTransaction();
         const receipt = await response?.wait(0);
 
-        let _balance = "";
+        let _balance = "0.0";
         if (constructorInputs?.stateMutability === "payable") {
           updateWalletBalance();
-          _balance = ethers.formatEther(value?.value || 0);
+          _balance = ethers.formatEther(value.value);
         }
 
         const newContract: DeployedContract = {
@@ -268,7 +272,7 @@ function App() {
         };
         setDeployedContract((prev) => [...prev, newContract]);
 
-        const log = await buildDeploymentLog(
+        const log = buildDeploymentLog(
           true,
           wallets[currentWallet].publicKey,
           `${currentContractData.basename}:${currentContractData.contractName}.(constructor)`,
@@ -281,7 +285,7 @@ function App() {
         setLogData((prev) => [...prev, log]);
       } catch (err: any) {
         consoleLog(`deployment error : ${JSON.stringify(err, null, 2)}`);
-        const log = await buildDeploymentLog(
+        const log = buildDeploymentLog(
           false,
           wallets[currentWallet].publicKey,
           `${currentContractData.basename}:${currentContractData.contractName}.(constructor)`,
@@ -425,11 +429,16 @@ function App() {
         if (log !== undefined) {
           setLogData((prev) => [...prev, log]);
         }
+
         // setting refresh tick
         setDeployedContract((prevContracts) =>
           prevContracts.map((contract) =>
             contract.address === contractAddress
-              ? { ...contract, refreshTick: contract.refreshTick + 1 }
+              ? {
+                  ...contract,
+                  refreshTick: contract.refreshTick + 1,
+                  balance: ethers.formatEther(value.value),
+                }
               : contract
           )
         );
@@ -548,7 +557,36 @@ function App() {
 
   return (
     <div>
-      <h1>SlotMatrix</h1>
+      <div
+        style={{ display: "flex", flexDirection: "row", alignItems: "center" }}
+      >
+        <h1>SlotMatrix</h1>
+
+        {showCheck && (
+          <div
+            style={{
+              marginLeft: "12px",
+              backgroundColor: "#5ece00", // green background
+              borderRadius: "50%",
+              display: "flex",
+              padding: "4px",
+              alignItems: "center",
+              justifyContent: "center",
+              width: "22px",
+              height: "22px",
+            }}
+          >
+            <i
+              className="codicon codicon-check-all"
+              style={{
+                color: "white",
+                fontSize: "16px",
+                fontWeight: "bold",
+              }}
+            ></i>
+          </div>
+        )}
+      </div>
 
       <p>Code. Deploy. Inspect. All in One Matrix.</p>
 
@@ -603,7 +641,8 @@ function App() {
 
           {/* deployable contract  */}
           <div>
-            <div className="heading">Deployable Contract</div>
+            <div className="heading ">Deployable Contract</div>
+
             <VscodeSingleSelect
               onChange={(event) => {
                 setCurrentContractFileIndex(
@@ -741,14 +780,30 @@ function App() {
               Logs
             </div>
 
-            <div
-              className="icon "
-              onClick={() => {
-                setLogData([]);
-              }}
-              style={{ cursor: "pointer" }}
-            >
-              <i className="codicon codicon-clear-all"></i>
+            <div style={{ display: "flex", flexDirection: "row" }}>
+              <div
+                className="icon "
+                onClick={() => {
+                  setLogData([]);
+                }}
+                style={{ cursor: "pointer", marginRight: "12px" }}
+                title="Clear logs"
+              >
+                <i className="codicon codicon-circle-slash"></i>
+              </div>
+              <div
+                className="icon "
+                onClick={() => {
+                  setLogData([]);
+                  setDeployedContract([]);
+                  setWalletData(AnvilKeys);
+                  // re run anvil
+                }}
+                style={{ cursor: "pointer" }}
+                title="Reset all"
+              >
+                <i className="codicon codicon-clear-all"></i>
+              </div>
             </div>
           </div>
           <VscodeDivider />
