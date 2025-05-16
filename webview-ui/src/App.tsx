@@ -391,17 +391,21 @@ function App() {
             };
 
       try {
-        const rawOutput = await provider.call({
-          to: contractAddress,
-          data: iff.encodeFunctionData(functionData.name, [...args]),
-          value: value.value,
-          from: wallets[currentWallet].publicKey,
-        });
+        let rawOutput: any = undefined;
+        let decodedOutput: any = undefined;
+        if (functionData.outputs !== undefined) {
+          rawOutput = await provider.call({
+            to: contractAddress,
+            data: iff.encodeFunctionData(functionData.name, [...args]),
+            value: value.value,
+            from: wallets[currentWallet].publicKey,
+          });
 
-        const decodedOutput = iff.decodeFunctionResult(
-          functionData.name,
-          rawOutput
-        );
+          decodedOutput = iff.decodeFunctionResult(
+            functionData.name,
+            rawOutput
+          );
+        }
         if (decodedOutput.length > 0 && functionData.outputs !== undefined) {
           const newOutput: Output[] = functionData.outputs.map(
             (v: Output, i) => ({

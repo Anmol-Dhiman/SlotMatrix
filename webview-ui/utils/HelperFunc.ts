@@ -65,8 +65,12 @@ export function parseArgs(inputs: Input[]): any[] {
       } else if (type === "string") {
         result.push(value);
       } else if (type.startsWith("bytes")) {
-        if (/^0x[0-9a-fA-F]*$/.test(value) && value.length % 2 === 0) {
-          result.push(value);
+        const isHex = /^0x[0-9a-fA-F]*$/.test(value);
+        const isEvenLength = value.length % 2 === 0;
+
+        // Special case for empty bytes
+        if (value === "0x" || value === "" || (isHex && isEvenLength)) {
+          result.push(value === "" ? "0x" : value);
         } else {
           showError(`Invalid bytes value for ${name}`);
         }
@@ -90,7 +94,7 @@ export function parseArgs(inputs: Input[]): any[] {
               },
             ])[0]
         );
-        
+
         result.push(parsedArrayValue);
       } else if (type === "tuple") {
         const parsedArray = JSON.parse(value);

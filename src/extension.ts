@@ -227,75 +227,143 @@ function runCommand(command: string) {
   );
 }
 
-// Util: Recursively find .sol files in a directory
-function getSolidityFiles(dir: string): string[] {
-  let results: string[] = [];
+type ContractInfo = {
+  contractName: string;
+  contractFilePath: string;
+  basename: string;
+};
 
-  if (!fs.existsSync(dir)) return results;
+const visitedFiles = new Set<string>();
 
-  const entries = fs.readdirSync(dir);
+// Step 1: Parse remappings.txt
+function getRemappings(projectRoot: string): Record<string, string> {
+  const remappingsPath = path.join(projectRoot, "remappings.txt");
+  const remappings: Record<string, string> = {};
 
-  for (const entry of entries) {
-    const fullPath = path.join(dir, entry);
-    const stat = fs.statSync(fullPath);
+  if (!fs.existsSync(remappingsPath)) return remappings;
 
-    if (stat.isDirectory()) {
-      results = results.concat(getSolidityFiles(fullPath));
-    } else if (entry.endsWith(".sol")) {
-      results.push(fullPath);
+  const lines = fs
+    .readFileSync(remappingsPath, "utf8")
+    .split("\n")
+    .filter(Boolean);
+  for (const line of lines) {
+    const [alias, target] = line.split("=");
+    if (alias && target) {
+      remappings[alias.replace(/\/+$/, "")] = target;
     }
   }
 
-  return results;
+  return remappings;
 }
 
-// Util: Parse a file and return all deployable contracts
-function getContractsFromFile(
-  filePath: string
-): { contractName: string; contractFilePath: string; basename: string }[] {
-  const content = fs.readFileSync(filePath, "utf8");
+// Step 2: Resolve import paths using remappings
+function resolveImportPath(
+  importPath: string,
+  currentDir: string,
+  projectRoot: string,
+  remappings: Record<string, string>
+): string | null {
+  if (importPath.startsWith("./") || importPath.startsWith("../")) {
+    return path.resolve(currentDir, importPath);
+  }
 
-  const contracts: {
-    contractName: string;
-    contractFilePath: string;
-    basename: string;
-  }[] = [];
+  for (const alias in remappings) {
+    if (importPath.startsWith(alias)) {
+      const resolved = importPath.replace(alias, remappings[alias]);
+      return path.resolve(projectRoot, resolved);
+    }
+  }
+
+  return null;
+}
+
+// Step 3: Extract deployable contracts only
+function getContractsFromFile(
+  filePath: string,
+  projectRoot: string,
+  remappings: Record<string, string>
+): ContractInfo[] {
+  const resolvedPath = path.resolve(filePath);
+  if (visitedFiles.has(resolvedPath)) return [];
+  visitedFiles.add(resolvedPath);
+
+  const content = fs.readFileSync(resolvedPath, "utf8");
+  const contracts: ContractInfo[] = [];
 
   try {
-    const contractRegex = /\b(abstract\s+)?contract\s+(\w+)/g;
+    // Match ONLY non-abstract, non-interface, non-library contracts
+    const contractRegex = /^\s*contract\s+(\w+)/gm;
     let match: RegExpExecArray | null;
+
     while ((match = contractRegex.exec(content)) !== null) {
-      const isAbstract = Boolean(match[1]);
-      const contractName = match[2];
-      if (isAbstract) continue;
+      const contractName = match[1];
       contracts.push({
-        contractName: contractName,
-        contractFilePath: filePath,
-        basename: path.basename(filePath),
+        contractName,
+        contractFilePath: resolvedPath,
+        basename: path.basename(resolvedPath),
       });
     }
+
+    // Recursively parse valid imports
+    const importRegex =
+      /^\s*import\s+(?:(?:\{[^}]+\})\s+from\s+)?["']([^"']+)["'];/gm;
+    let importMatch: RegExpExecArray | null;
+    while ((importMatch = importRegex.exec(content)) !== null) {
+      const importPath = importMatch[1];
+      const resolvedImport = resolveImportPath(
+        importPath,
+        path.dirname(resolvedPath),
+        projectRoot,
+        remappings
+      );
+
+      if (resolvedImport && fs.existsSync(resolvedImport)) {
+        contracts.push(
+          ...getContractsFromFile(resolvedImport, projectRoot, remappings)
+        );
+      }
+    }
   } catch (err) {
-    console.warn(`Failed to parse ${filePath}:`, err);
+    console.warn(`Error parsing file ${filePath}:`, err);
   }
 
   return contracts;
 }
 
-// Main: Get all deployable contracts from the "src" folder
-function getAllDeployableContracts(): {
-  contractName: string;
-  contractFilePath: string;
-  basename: string;
-}[] {
+// Step 4: Gather all deployable contracts
+function getAllDeployableContracts(): ContractInfo[] {
   const workspaceFolders = vscode.workspace.workspaceFolders;
-
-  if (!workspaceFolders || workspaceFolders.length === 0) {
+  if (!workspaceFolders?.length) {
     vscode.window.showErrorMessage("No workspace folder open");
     return [];
   }
 
-  const srcPath = path.join(workspaceFolders[0].uri.fsPath, "src");
+  const projectRoot = workspaceFolders[0].uri.fsPath;
+  const srcPath = path.join(projectRoot, "src");
+  const remappings = getRemappings(projectRoot);
 
   const solFiles = getSolidityFiles(srcPath);
-  return solFiles.flatMap(getContractsFromFile);
+  visitedFiles.clear();
+
+  return solFiles.flatMap((file) =>
+    getContractsFromFile(file, projectRoot, remappings)
+  );
+}
+
+// Helper: Recursively gather Solidity files from a directory
+function getSolidityFiles(dir: string): string[] {
+  let files: string[] = [];
+
+  fs.readdirSync(dir).forEach((file) => {
+    const fullPath = path.join(dir, file);
+    const stat = fs.statSync(fullPath);
+
+    if (stat.isDirectory()) {
+      files = files.concat(getSolidityFiles(fullPath));
+    } else if (stat.isFile() && file.endsWith(".sol")) {
+      files.push(fullPath);
+    }
+  });
+
+  return files;
 }
