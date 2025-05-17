@@ -1,12 +1,15 @@
 import * as vscode from "vscode";
 import * as path from "path";
 import * as fs from "fs";
+import * as http from "http";
 import { MessageId, Terminals, VSCodeMessage } from "./MessageId";
-import { exec } from "child_process";
+import { exec, spawn, ChildProcessWithoutNullStreams } from "child_process";
 
 let anvilTerminal: vscode.Terminal | undefined;
 let commandTerminal: vscode.Terminal | undefined;
 let panel: vscode.WebviewPanel;
+let anvilProcess: ChildProcessWithoutNullStreams | null = null;
+const ANVIL_PORT = "9545"; // Customize this as needed
 
 export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
@@ -70,10 +73,11 @@ export function activate(context: vscode.ExtensionContext) {
                 message.data === Terminals.anvilTerminal &&
                 anvilTerminal === undefined
               ) {
-                anvilTerminal = vscode.window.createTerminal({
-                  name: "SlotMatrix Anvil Terminal",
-                });
-                anvilTerminal.sendText("anvil");
+                // anvilTerminal = vscode.window.createTerminal({
+                //   name: "SlotMatrix Anvil Terminal",
+                // });
+                // anvilTerminal.sendText("anvil");
+                startAnvil();
               } else if (
                 message.data === Terminals.commandTerminal &&
                 commandTerminal === undefined
@@ -163,7 +167,7 @@ export function activate(context: vscode.ExtensionContext) {
           "slotmatrixPanelOpen",
           false
         );
-        anvilTerminal?.dispose();
+        stopAnvil();
         commandTerminal?.dispose();
       });
     })
@@ -173,6 +177,88 @@ export function activate(context: vscode.ExtensionContext) {
       runBuildCommand();
     })
   );
+}
+
+function startAnvil(port = ANVIL_PORT): Promise<void> {
+  return new Promise((resolve, reject) => {
+    anvilProcess = spawn("anvil", ["--port", port], {
+      detached: true,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    anvilProcess.stdout.on("data", (data) => {
+      const output = data.toString();
+      console.log(`log :[anvil stdout]: ${output}`);
+      if (output.includes("Listening on")) {
+        vscode.window.showInformationMessage(`Anvil started on port ${port}`);
+        resolve();
+      }
+    });
+
+    anvilProcess.stderr.on("data", (data) => {
+      console.error(`log : [anvil stderr]: ${data}`);
+    });
+
+    anvilProcess.on("error", (err) => {
+      anvilProcess = null;
+      reject(err);
+    });
+
+    anvilProcess.on("close", (code) => {
+      console.log(`log : Anvil exited with code ${code}`);
+      anvilProcess = null;
+    });
+  });
+}
+
+export async function restartAnvil(port = ANVIL_PORT) {
+  stopAnvil();
+  try {
+    await startAnvil(port);
+    const up = await isAnvilRunning(port);
+    if (!up) {
+      vscode.window.showErrorMessage(`Anvil failed to start on port ${port}`);
+    }
+  } catch (err) {
+    vscode.window.showErrorMessage(`Error restarting Anvil: ${err}`);
+  }
+}
+
+function stopAnvil() {
+  if (anvilProcess && anvilProcess.pid) {
+    process.kill(-anvilProcess.pid); // Kill the full process group
+    anvilProcess = null;
+    console.log("log : Anvil stopped.");
+  }
+}
+
+function isAnvilRunning(port: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const req = http.request(
+      {
+        hostname: "127.0.0.1",
+        port,
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      },
+      (res) => {
+        resolve(res.statusCode === 200);
+      }
+    );
+
+    req.on("error", () => resolve(false));
+
+    req.write(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        method: "eth_blockNumber",
+        params: [],
+        id: 1,
+      })
+    );
+
+    req.end();
+  });
 }
 
 function runBuildCommand() {

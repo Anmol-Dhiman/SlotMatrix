@@ -54,7 +54,7 @@ export const vscode = isVSCode
     };
 
 const ETHFormat = ["wei", "gwei", "finney", "ether"];
-const provider = new ethers.JsonRpcProvider("http://localhost:8545");
+export const provider = new ethers.JsonRpcProvider("http://localhost:9545");
 
 function App() {
   /*//////////////////////////////////////////////////////////////
@@ -423,7 +423,7 @@ function App() {
         const log = buildFunctionCallLogs(
           false,
           wallets[currentWallet].publicKey,
-         `${currentContractData.basename}:${currentContractData.contractName}.fallback()`,
+          `${currentContractData.basename}:${currentContractData.contractName}.fallback()`,
           "fallback",
           calldataHex,
           [calldataHex],
@@ -667,12 +667,11 @@ function App() {
         style={{ display: "flex", flexDirection: "row", alignItems: "center" }}
       >
         <h1>SlotMatrix</h1>
-
         {showCheck && (
           <div
             style={{
               marginLeft: "12px",
-              backgroundColor: "#5ece00", // green background
+              backgroundColor: "#5ece00",
               borderRadius: "50%",
               display: "flex",
               padding: "4px",

@@ -1,7 +1,7 @@
 import { MessageId, VSCodeMessage } from "../../src/MessageId";
 import { ethers } from "ethers";
 import { Input, LogData } from "./Types";
-import { vscode } from "../src/App";
+import { vscode, provider } from "../src/App";
 
 export function consoleLog(message: string) {
   vscode.postMessage({
@@ -167,7 +167,6 @@ export function short(val: string): string {
 export async function getFutureContractAddress(
   deployerAddress: string
 ): Promise<string> {
-  const provider = new ethers.JsonRpcProvider("http://localhost:8545");
   const nonce = await provider.getTransactionCount(deployerAddress);
   return ethers.getCreateAddress({ from: deployerAddress, nonce });
 }
@@ -406,5 +405,25 @@ export function buildFunctionCallLogs(
   } catch (err) {
     consoleLog(`error in logs : ${JSON.stringify(err, null, 2)}`);
     return undefined;
+  }
+}
+
+export async function isAnvilRunning(port: string): Promise<boolean> {
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        method: "eth_blockNumber",
+        params: [],
+        id: 1,
+      }),
+    });
+    return response.ok;
+  } catch (error) {
+    return false;
   }
 }

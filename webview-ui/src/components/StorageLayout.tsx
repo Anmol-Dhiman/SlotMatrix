@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import JsonView from "@uiw/react-json-view";
 import { vscodeTheme } from "@uiw/react-json-view/vscode";
 import { consoleLog } from "../../utils/HelperFunc";
+import { provider } from "../App";
 
 interface StorageLayoutInterface {
   storageLayout: {
@@ -78,7 +79,6 @@ function StorageLayout({
     return ethers.zeroPadValue(ethers.toBeHex(BigInt(slot)), 32);
   }
 
-  //   correct string and bytes storage funciton
   async function getStringOrBytesStorage(
     slot: bigint,
     label: string,
@@ -206,7 +206,7 @@ function StorageLayout({
           depth + 1
         );
       } else if (type.startsWith("t_array") && type.endsWith("_storage")) {
-        dataArray = await getStaticArrayStorage(slot, label, type, depth );
+        dataArray = await getStaticArrayStorage(slot, label, type, depth);
       } else if (type.startsWith("t_mapping")) {
         slotMap.set(slot, {
           slot: slot.toString(),
@@ -218,13 +218,13 @@ function StorageLayout({
         type.startsWith("t_string_storage") ||
         type.startsWith("t_bytes_storage")
       ) {
-        dataArray = await getStringOrBytesStorage(slot, label, depth );
+        dataArray = await getStringOrBytesStorage(slot, label, depth);
       } else if (type.startsWith("t_struct")) {
         dataArray = await getStructStorage(
           storageLayout.types[type],
           slot,
           label,
-          depth 
+          depth
         );
       }
       if (dataArray !== undefined)
@@ -384,7 +384,6 @@ function StorageLayout({
   }
 
   async function getStorageValue(slot: number | string): Promise<string> {
-    const provider = new ethers.JsonRpcProvider("http://localhost:8545");
     const slotHex = toSlotHex(slot);
     return provider.getStorage(contractAddress, slotHex);
   }
