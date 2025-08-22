@@ -15,7 +15,7 @@
     "@uiw/react-json-view": "^2.0.0-alpha.32",
     "@vscode-elements/react-elements": "^1.15.0",
     "@vscode/codicons": "^0.0.36",
-    "react": "^19.0.0",
+    "react": "^19.1.1",
     "react-dom": "^19.0.0",
     "react-icons": "^5.5.0",
     "react-redux": "^9.2.0",
